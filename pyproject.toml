@@ -20,6 +20,7 @@ nobet = "nobet.kapi:cli"
 nobet-akis = "nobet.akis:cli"
 nobet-dongu = "nobet.dongu:main"
 nobet-gecmis = "nobet.gecmis:main"
+nobet-haber = "nobet.haber:main"
 nobet-tara = "nobet.tara:main"
 
 [tool.setuptools.packages.find]

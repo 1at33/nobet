@@ -13,6 +13,8 @@ if SRC not in sys.path:
 def nobet_ayar_izole(monkeypatch, tmp_path):
     monkeypatch.delenv("NOBET_AYAR", raising=False)
     monkeypatch.delenv("NOBET_AKIS_DIZIN", raising=False)
+    monkeypatch.delenv("NOBET_HABER_DIZIN", raising=False)
+    monkeypatch.delenv("NOBET_HABER_SURE", raising=False)
     monkeypatch.delenv("NOBET_ORTAM_IZIN", raising=False)
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "xdg-state"))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))

@@ -23,3 +23,8 @@ modeller = ["cli-model"]         # roller verilmezse yazici + reviewer
 # deneme_benzerlik = 0.85      # iki denemenin kelime 4-gram Jaccard benzerliği; bu ve üstü tekrar
 # kapali = []                  # ic_tekrar | deneme_tekrari | kopya_kanit | muhur
 # akis_denetle = false         # true: nobet-akis denetle döngü kapısını da koşar
+
+# İsteğe bağlı: haberleşme katmanı (nobet-haber). Bilinmeyen anahtar hatadır.
+# [haber]
+# capraz_zorunlu = false       # true: reviewer başka sağlayıcıdan değilse zarf reddedilir
+# devir = 1                    # kota sinyalinde en çok kaç kez başka sağlayıcıya devredilir (0-5)

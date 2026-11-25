@@ -5,7 +5,8 @@ Windows: %APPDATA%\\nobet\\ayar.toml. Standart kütüphane (tomllib); bağımlı
 
 Kodda sağlayıcı ya da model adı varsayılmaz. Bilinmeyen anahtar ValueError'dur.
 Anahtar değeri yazılmaz, yalnız ortam değişkeninin adı (anahtar_env).
-[dongu] tablosu döngü kapısının eşikleridir (nobet.dongu doğrular).
+[dongu] tablosu döngü kapısının eşikleridir (nobet.dongu doğrular); [haber] tablosu haberleşme
+katmanının ayarıdır (nobet.haber doğrular).
 """
 import os
 import re
@@ -16,7 +17,7 @@ from pathlib import Path
 
 from nobet.gizli import gizli_mi
 
-IZINLI = frozenset({"saglayici", "dongu"})
+IZINLI = frozenset({"saglayici", "dongu", "haber"})
 _SAG_TUR = frozenset({"cli", "api", "yerel"})
 _ROLLER = frozenset({"yazici", "reviewer"})
 _SAG_ALAN = frozenset({"ad", "tur", "komut", "taban_url", "anahtar_env", "modeller", "roller"})
@@ -136,6 +137,10 @@ def saglayicilari_ayikla(veri):
         from nobet.dongu import ayar_ayikla
 
         ayar_ayikla(veri["dongu"])
+    if "haber" in veri:
+        from nobet.haber import ayar_ayikla as haber_ayikla
+
+        haber_ayikla(veri["haber"])
     ham = veri.get("saglayici", [])
     if not isinstance(ham, list):
         raise ValueError("saglayici liste olmalı")  # noqa: TRY004 - yapılandırma sözleşmesi

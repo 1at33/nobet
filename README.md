@@ -20,12 +20,16 @@ evidence.
 An optional orchestration shell, `nobet-akis`, runs the whole loop with your own providers: open a lane (git
 worktree + lane directory), run the writer agent command with a scrubbed environment, run the done-evidence, gate,
 contract commands and report check, ask a reviewer from another provider, commit and remove the lane via git only.
+A messaging layer, `nobet-haber`, lets agents of different providers exchange stdlib-validated JSON envelopes
+through a file mailbox (atomic writes, per-recipient inbox, claim/ack states); the recipient is routed only to
+profiles in your `ayar.toml` (cross-provider reviewer first, quota failover) and run with your configured
+command, a scrubbed environment and masked logs.
 Exit codes: 0 clean, 1 violation, 2 could not check. Docs and identifiers are Turkish.
 
 ## Kurulum
 
 ```
-pip install -e .            # nobet, nobet-akis, nobet-dongu, nobet-tara ve nobet-gecmis komutları
+pip install -e .            # nobet, nobet-akis, nobet-dongu, nobet-haber, nobet-tara ve nobet-gecmis komutları
 pip install -e ".[dev]"     # + pytest, ruff
 ```
 
@@ -39,6 +43,7 @@ pip install -e ".[dev]"     # + pytest, ruff
 | `nobet.profil` | **Yazıcı/reviewer profilleri.** `ayar.toml` içindeki `[[saglayici]]` girdilerinden türer; kodda model listesi yoktur. `reviewer_adaylari` önce başka sağlayıcıyı seçer, yoksa aynı sağlayıcının öteki modelini. |
 | `nobet.akis` | **Orkestrasyon kabuğu (`nobet-akis`).** Şerit açar, yazıcıyı çalıştırır, bitti + kapı + sözleşme + rapor sırasını koşar, başka sağlayıcıdan reviewer çağırır, şeridi yalnız git ile kapatır. Kapı kararlarını kendisi vermez; yukarıdaki modülleri çağırır. Ayrıntı: [Orkestrasyon](#orkestrasyon-nobet-akis). |
 | `nobet.dongu` | **Döngü kapısı (`nobet-dongu`).** Ajan çıktısında ve denemeler arasında tekrar, düşük bilgili dolgu, kopya kanıt ve kanıtsız tekrar iddiayı sıkıştırma oranı, entropi ve k-gram Jaccard ile ölçer; eşik aşılırsa reddeder. Sezgiseldir, sert kapının yerine geçmez. Ayrıntı: [Döngü kapısı](#döngü-kapısı-nobet-dongu). |
+| `nobet.haber` | **Haberleşme (`nobet-haber`).** Sağlayıcılar arası ajan mesajları: standart kütüphaneyle doğrulanan zarf, alıcı başına dosya posta kutusu (atomik yazım, alma/onay durumu), `ayar.toml` profillerinden yönlendirme (önce başka sağlayıcıdan reviewer, kotada devir) ve profilin komutunu sırsız ortamla çalıştıran adaptör. Ayrıntı: [Haberleşme](#haberleşme-nobet-haber). |
 | `nobet.tara` | **Çalışma ağacında kişisel veri.** İzlenen dosyaların diskteki hali ve `.gitignore` dışındaki izlenmeyen dosyalar: geçerli T.C. kimlik no, izinli olmayan e-posta, ad listesindeki adlar, kullanıcı adı taşıyan ev dizini yolları (`C:\Users\<ad>`, `/home/<ad>`, `/Users/<ad>`). gitleaks kuruluysa sır taraması da yapar. Commit öncesi ve yayın öncesi çalıştırılır. |
 | `nobet.gecmis` | **Git geçmişinde kişisel veri.** Ağaç taramasının göremediğine bakar: yazar/committer e-postaları, commit mesajı ve `Co-authored-by` satırları, tag'ler, sonradan silinen dosyalar; `--github` ile dalsız kalmış commit'ler. Bulgunun değerini asla yazmaz, yalnız yerini. |
 
@@ -75,8 +80,8 @@ bloğu, çift numaralı sözleşme maddesi) birer vaka olarak tutar.
 
 Sağlayıcılar yalnız kullanıcının dosyasından gelir: `NOBET_AYAR` (yol) > `$XDG_CONFIG_HOME/nobet/ayar.toml`
 (Windows: `%APPDATA%\nobet\ayar.toml`). Örnek: [ornek/ayar.ornek.toml](ornek/ayar.ornek.toml). Dosyada
-yalnız `[[saglayici]]` tabloları ve isteğe bağlı `[dongu]` tablosu ([döngü kapısı](#döngü-kapısı-nobet-dongu)
-eşikleri) olur; bilinmeyen anahtar hatadır. Anahtar değeri yazılırsa reddedilir,
+yalnız `[[saglayici]]` tabloları, isteğe bağlı `[dongu]` tablosu ([döngü kapısı](#döngü-kapısı-nobet-dongu)
+eşikleri) ve isteğe bağlı `[haber]` tablosu ([haberleşme](#haberleşme-nobet-haber)) olur; bilinmeyen anahtar hatadır. Anahtar değeri yazılırsa reddedilir,
 yalnız değişkenin adı (`anahtar_env`) yazılır.
 
 | Değişken | Etki |
@@ -86,6 +91,8 @@ yalnız değişkenin adı (`anahtar_env`) yazılır.
 | `NOBET_ORTAM_IZIN` | sözleşme komutlarına, bitti komutuna ve ajanlara geçmesine izin verilen sır adlı değişkenler (virgülle); varsayılan: hiçbiri |
 | `NOBET_AKIS_SURE` | `nobet-akis` ajan çağrısının zaman aşımı (varsayılan `45m`) |
 | `NOBET_AKIS_DIZIN` | `nobet-akis` iş dizinlerinin kökü |
+| `NOBET_HABER_DIZIN` | `nobet-haber` posta kökü |
+| `NOBET_HABER_SURE` | `nobet-haber isle` ajan çağrısının zaman aşımı (varsayılan `45m`) |
 | `NOBET_ADLAR` | `nobet-tara` ve `nobet-gecmis` ad listesi; verilmezse `$XDG_CONFIG_HOME/nobet/kisisel-adlar.txt`. Repo dışında tutun. |
 | `GITLEAKS` | gitleaks çalıştırılabilir adı ya da yolu (varsayılan `gitleaks`, PATH'ten) |
 
@@ -228,6 +235,84 @@ ajan (ya da saldırgan) ölçüleri kolayca geçer; tersine kalıp raporlar, tab
 verebilir (eşiği yükselt ya da kapıyı `--kapat` ile kapat). Anlamı, doğruluğu ve testlerin gerçekten geçtiğini
 denetlemez: [sert kapının](#parçalar) (sahiplik, test dokunulmazlığı, bitti kanıtı, rapor-kanıt karşılaştırması)
 yerine geçmez, ona eklenir. Çift karşılaştırma deneme sayısında karesel büyür; çok uzun aralıkları parçala.
+
+## Haberleşme (nobet-haber)
+
+Farklı sağlayıcılardaki ajanlar birbirine süreç açmaz; her mesaj bir **zarftır** ve alıcının posta kutusuna
+düşer. `nobet-haber isle` kutudaki görevi alıcı profilin `ayar.toml` komutuyla çalıştırır, cevabı yeni bir zarf
+olarak gönderenin kutusuna yollar. Model ya da firma adı kodda yoktur; alıcı yalnız `ayar.toml` profillerinden biridir.
+
+```
+nobet-haber [--json] [--ayar A] dogrula ZARF|-          # şema + yönlendirme, yazmaz
+nobet-haber [--json] gonder ZARF|-                      # doğrula, maskele, yönlendir, kutuya yaz
+nobet-haber [--json] isle PROFIL (--dizin D | --serit AD) [--id ID]
+nobet-haber [--json] liste PROFIL [--hepsi]  |  oku PROFIL ID  |  onayla PROFIL ID  |  kutular  |  sema
+```
+
+Çıkış 0 tamam, 1 ret (geçersiz zarf, yönlendirilemedi, tekrar gönderim, ajan hatası, kota, koruma ihlali),
+2 denetlenemedi (okunamayan dosya, bozuk ayar, çalışma dizini yok) ya da kullanım hatası.
+
+**Zarf** (`nobet-haber sema` JSON Schema'sını basar; normatif olan doğrulayıcıdır, `jsonschema` gerekmez):
+
+```json
+{"surum": 1, "id": "<32 hex>", "is_id": "serit-1", "ebeveyn": null, "tur": "gorev",
+ "gonderen": {"profil": "yonetici", "rol": "yonetici"}, "alici": {"profil": null, "rol": "reviewer"},
+ "yazici": "cli-model", "zaman": "2026-01-01T00:00:00Z",
+ "govde": {"metin": "farkı incele"}, "ekler": [{"yol": "docs/fark.txt", "sha256": "<64 hex>"}]}
+```
+
+| Alan | Kural |
+|---|---|
+| `tur` | `gorev`, `soru` (ajan çalıştırır); `sonuc`, `hata`, `kota` (bilgi; okunur ve onaylanır) |
+| `gonderen`, `alici` | `profil` + `rol` (`yonetici`, `yazici`, `reviewer`). Yöneticinin profili `yonetici`. Alıcının profili `null` ise yönlendirici seçer |
+| `yazici` | incelenen işin yazıcı profili; reviewer'a giden zarfta zorunlu |
+| `is_id` | `nobet-akis` şerit adıyla aynı biçim; `--serit` ile işlenirken şerit adına eşit olmalı |
+| `govde` | `metin` zorunlu; ek anahtarlar `[a-z_][a-z0-9_]*`, en çok 6 düzey |
+| `ekler` | göreli, `/` ayraçlı, `..`/sürücü harfi/ters bölü yok; `isle` ajanı çalıştırmadan önce dosyanın çalışma dizini içinde ve hash'inin tuttuğuna bakar |
+
+Zarf alanları güvenilmez girdidir (başka ajanın çıktısı). Fazla ya da eksik alan, yanlış tür, 512 KiB'ı aşan
+zarf, 100 000 karakteri aşan metin, tekrar eden JSON anahtarı, `NaN`, aşırı iç içe yapı, kontrol karakteri ve
+terminal kaçışı reddedilir. Zarf komut, yol, çalışma dizini ya da sağlayıcı seçemez.
+
+**Posta kutusu.** `<kök>/kutular/<kutu>/{gelen,isleniyor,islenen,reddedilen}/<id>.json`; kök
+`NOBET_HABER_DIZIN` > `$XDG_STATE_HOME/nobet/haber` > `~/.local/state/nobet/haber` (Windows:
+`%LOCALAPPDATA%\nobet\haber`). Kutu adı profil adından türetilir (küçük harf özet + ad hash'i): profil adı yol
+olarak kullanılmaz, Windows'ta da geçerlidir. Yazım atomiktir (geçici dosya fsync, hedefe üzerine yazmadan hard
+link); aynı kimlik ikinci kez yazılmaz. `isle` zarfı tek rename ile `isleniyor/`'a alır, iki işleyici aynı zarfı
+alamaz; işlenemezse (denetlenemedi) `gelen/`'e döner. Diske yalnız maskeli `govde` yazılır; ajan günlükleri
+`gunluk/<id>-N.log` maskelidir. Sembolik bağ olan kutu ya da zarf dosyası okunmaz.
+
+**Yönlendirme** (`ayar.toml` profilleri, `nobet.profil` ile):
+
+- `yazici`: yazıcı rolü olan `tur=cli` profil; profil verilmezse `ayar.toml` sırasıyla ilki.
+- `reviewer`: `profil.reviewer_adaylari` listesi, yani önce başka sağlayıcı, yoksa aynı sağlayıcının öteki
+  modeli. Listede olmayan profil reddedilir: ajan, zarfa kendi sağlayıcısından bir reviewer yazarak çapraz
+  incelemeyi atlatamaz. `[haber] capraz_zorunlu = true` aynı sağlayıcıya düşmeyi de reddeder.
+- Gönderen `yazici`/`reviewer` ise profil `ayar.toml`'da o rolle olmalıdır.
+- **Kota devri:** sağlayıcı sıfır olmayan çıkışla kota/hız sınırı iletisi verirse (`rate limit`, `quota
+  exceeded`, `429`...) o sağlayıcı dışlanır, zarf aynı rol için yeniden yönlendirilir; en çok `[haber] devir`
+  kez (varsayılan 1, 0 kapatır). Zincir cevap zarfının `govde.devir` alanına yazılır.
+
+**Adaptör.** Ajan `nobet-akis` ile aynı yoldan çalışır (`akis.ajan_kos`): komut `[[saglayici]]` şablonundan,
+kabuksuz; ortam `gizli.temiz_ortam` ile sırsız (`NOBET_ORTAM_IZIN`), çalışma dizini yalnız `--dizin` ya da
+`--serit` ile operatörün verdiği yer; `{rol}` `yazici` ya da `reviewer`. API sağlayıcı yalnız reviewer olur.
+Cevap maskelenir, terminal kaçışları atılır, sınırda kesilir.
+
+**nobet-akis ile (isteğe bağlı).** `isle --serit AD` ajanı şeridin worktree'sinde çalıştırır ve akış kabuğunun
+korumasını uygular: iş dizini, git config ve hook'lar mühürlenir; ajan değiştirirse geri yazılır ve
+`koruma.ihlal`'e işlenir (`denetle`/`kaydet` reddeder). Reviewer worktree'yi değiştirirse cevap `hata` olur.
+`nobet-akis` komutlarının davranışı değişmez.
+
+```toml
+[haber]
+capraz_zorunlu = false   # true: reviewer başka sağlayıcıdan değilse ret
+devir = 1                # kota sinyalinde en çok kaç kez başka sağlayıcıya devredilir (0-5)
+```
+
+**Sınırlar.** Tek makine, dosya sistemi; ağ servisi, oturum sürdürme, çok turlu düzeltme döngüsü ve durum
+makinesi yoktur (tek adım: zarf al, çalıştır, cevapla; döngüyü sen ya da `nobet-akis` kurar). Mesaj gövdesi
+istem enjeksiyonu taşıyabilir; ajana veri olarak verildiği söylenir ama bu bir koruma değildir, gerçek sınır
+ajan CLI'nin kendi sandbox'ı ve `--serit` korumasıdır. Maskeleme en iyi çabadır.
 
 ## Kişisel veri koruması (CI ve yayın öncesi)
 
