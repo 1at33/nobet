@@ -1,0 +1,64 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+# Yalnız okuma: iş akışı depoya yazmaz.
+permissions:
+  contents: read
+jobs:
+  kisisel-veri:
+    name: kisisel veri (agac + gecmis)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e .
+      # Ad listesi repoya girmez. İsteğe bağlı: depo ayarlarında KISISEL_ADLAR gizli değişkeni (her satır bir ad).
+      - name: ad listesi
+        env:
+          KISISEL_ADLAR: ${{ secrets.KISISEL_ADLAR }}
+        run: |
+          if [ -n "$KISISEL_ADLAR" ]; then
+            printf '%s\n' "$KISISEL_ADLAR" > "$RUNNER_TEMP/adlar.txt"
+            echo "NOBET_ADLAR=$RUNNER_TEMP/adlar.txt" >> "$GITHUB_ENV"
+          fi
+      - name: calisma agacini tara
+        run: python -m nobet.tara
+      # Yalnız yeni commit'ler taranır. Force-push'ta eski uç yoksa tüm geçmiş taranır.
+      - name: yeni commit'leri tara
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PUSH_ONCE: ${{ github.event.before }}
+          PUSH_SONRA: ${{ github.sha }}
+        run: |
+          if [ -n "$PR_HEAD" ]; then
+            python -m nobet.gecmis --aralik "$PR_BASE..$PR_HEAD"
+          elif git cat-file -e "$PUSH_ONCE^{commit}" 2>/dev/null; then
+            python -m nobet.gecmis --aralik "$PUSH_ONCE..$PUSH_SONRA"
+          else
+            python -m nobet.gecmis
+          fi
+      - name: ad listesini sil
+        if: always()
+        run: rm -f "$RUNNER_TEMP/adlar.txt"
+  test:
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev]"
+      - run: python -m pytest -q -p no:cacheprovider
+      - run: python -m ruff check src tests

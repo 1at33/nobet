@@ -1,0 +1,19 @@
+# Örnek nobet ayarı. Kopyala: ~/.config/nobet/ayar.toml (Windows: %APPDATA%\nobet\ayar.toml)
+# ya da NOBET_AYAR ile yol göster. Gerçek anahtar yazma: anahtar_env yalnız değişkenin adıdır.
+# Her model bir profil olur; reviewer önce başka sağlayıcıdan seçilir.
+# nobet-akis: tur=cli komutu kabuksuz çalışır; yer tutucular {istem} {worktree} {model} {cikti} {rol}.
+# {istem} yoksa istem stdin'den, {cikti} yoksa son cevap stdout'tan alınır. api/yerel yalnız reviewer olur.
+
+[[saglayici]]
+ad = "ornek-bulut"
+tur = "api"                      # cli | api | yerel
+taban_url = "https://ornek.example/v1"
+anahtar_env = "ORNEK_API_KEY"
+modeller = ["bulut-buyuk", "bulut-kucuk"]
+roller = ["reviewer"]            # api dosya düzenleyemez; nobet-akis'te yalnız reviewer
+
+[[saglayici]]
+ad = "ornek-cli"
+tur = "cli"
+komut = "ornek-cli calistir --model {model} --dizin {worktree} --istem-dosyasi {istem} --son-cevap {cikti}"
+modeller = ["cli-model"]         # roller verilmezse yazici + reviewer

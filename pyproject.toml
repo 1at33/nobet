@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nobet"
+version = "0.1.0"
+description = "Alt ajanlar için sert kapı ve orkestrasyon kabuğu: sahiplik, test dokunulmazlığı, bitti kanıtı, sır temizleme"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE", "NOTICE"]
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff==0.17.3"]
+
+[project.scripts]
+nobet = "nobet.kapi:cli"
+nobet-akis = "nobet.akis:cli"
+nobet-gecmis = "nobet.gecmis:main"
+nobet-tara = "nobet.tara:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
