@@ -206,7 +206,8 @@ def sonuc_riski(wt, taban, yol, durum):
                 simdi = b""
         if PYTEST_BOLUM.search(simdi) or PYTEST_BOLUM.search(taban_icerik(wt, taban, yol)):
             return "pytest yapılandırması değişti"
-    if posixpath.basename(yol) == ".gitignore" and durum != "D":
+    if posixpath.basename(yol) == ".gitignore":
+        # Silme de gizleyebilir: üst kuralı "!" ile açan alt .gitignore silinince dosya kaybolur.
         return ".gitignore değişti (dosya gizleyebilir)"
     return None
 

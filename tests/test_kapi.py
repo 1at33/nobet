@@ -618,3 +618,14 @@ def test_yeni_alt_gitignore_ihlal(serit, capsys):
     (wt / "src" / "sitecustomize.py").write_text("x\n")
     assert kapi.denetle(d, wt) == 1
     assert "kapi_ihlal: src/.gitignore (.gitignore değişti (dosya gizleyebilir))" in capsys.readouterr().out
+
+
+def test_alt_gitignore_silinmesi_ihlal(serit, capsys):
+    """Üst kuralı "!" ile açan alt .gitignore silinince izlenmeyen dosya gizlenir (B4 review, 2026-11-26)."""
+    d, wt = serit
+    (d / "sahiplik").write_text("**\n")
+    _taban_commit(d, wt, {".gitignore": "*.cfg\n", "src/.gitignore": "!ozel.cfg\n"})
+    (wt / "src" / ".gitignore").unlink()
+    (wt / "src" / "ozel.cfg").write_text("x\n")
+    assert kapi.denetle(d, wt) == 1
+    assert "kapi_ihlal: src/.gitignore (.gitignore değişti (dosya gizleyebilir))" in capsys.readouterr().out
