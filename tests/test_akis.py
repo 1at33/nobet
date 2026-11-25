@@ -136,21 +136,21 @@ def test_mutlu_yol(ortam, capsys):
     assert ac(ortam) == 0
     d, wt = serit(ortam)
     assert (wt / "tests" / "test_kabul.py").is_file()
-    assert "tests/test_kabul.py" in (d / "kabul").read_text()
-    assert (d / "taban").read_text().strip() == git(repo, "rev-parse", "HEAD")
+    assert "tests/test_kabul.py" in (d / "kabul").read_text(encoding="utf-8")
+    assert (d / "taban").read_text(encoding="utf-8").strip() == git(repo, "rev-parse", "HEAD")
     assert akis.main(["yaz", "s1", "b-yazar", str(brief)]) == 0
     assert akis.main(["denetle", "s1"]) == 0, capsys.readouterr().out
     assert (d / "rapor-1.md").is_file()
-    assert "cikis: 0" in (d / "bitti.log").read_text()
+    assert "cikis: 0" in (d / "bitti.log").read_text(encoding="utf-8")
     assert akis.main(["incele", "s1"]) == 0, capsys.readouterr().out
     assert akis.main(["kaydet", "s1", "-m", "a.py yenilendi"]) == 0
     assert akis.main(["kapat", "s1"]) == 0, capsys.readouterr().out
     assert not wt.exists()
-    assert (d / "durum-isaret").read_text().strip() == "teslim"
+    assert (d / "durum-isaret").read_text(encoding="utf-8").strip() == "teslim"
     assert git(repo, "show", "nobet/s1:src/a.py") == "yeni"
     assert git(repo, "show", "nobet/s1:tests/test_kabul.py").startswith("def test_kabul")
     # Ana çalışma ağacı değişmedi.
-    assert (repo / "src" / "a.py").read_text() == "eski\n"
+    assert (repo / "src" / "a.py").read_text(encoding="utf-8") == "eski\n"
 
 
 def test_bitti_komutu_yoksa_serit_acilmaz(ortam, capsys):
@@ -188,7 +188,7 @@ def test_sahiplik_disi_dosya_reddedilir(ortam, monkeypatch, capsys):
     assert akis.main(["yaz", "s1", "b-yazar", str(ortam[3])]) == 0
     assert akis.main(["denetle", "s1"]) == 1
     d, _ = serit(ortam)
-    log = (d / "bitti.log").read_text()
+    log = (d / "bitti.log").read_text(encoding="utf-8")
     assert "kapi_ihlal: kok.txt (sahiplik dışı (M))" in log
     assert "cikis: 1" in log
     assert not (d / "rapor-1.md").exists()  # KARŞILANDI iddiası kırmızı kanıtla çelişir
@@ -201,7 +201,7 @@ def test_mevcut_test_degisirse_reddedilir(ortam, monkeypatch, capsys):
     assert akis.main(["yaz", "s1", "b-yazar", str(ortam[3])]) == 0
     assert akis.main(["denetle", "s1"]) == 1
     d, _ = serit(ortam)
-    assert "kapi_ihlal: tests/test_a.py (mevcut test değişti)" in (d / "bitti.log").read_text()
+    assert "kapi_ihlal: tests/test_a.py (mevcut test değişti)" in (d / "bitti.log").read_text(encoding="utf-8")
 
 
 def test_yazici_serit_kaydini_bozarsa_geri_yuklenir(ortam, monkeypatch, capsys):
@@ -210,11 +210,11 @@ def test_yazici_serit_kaydini_bozarsa_geri_yuklenir(ortam, monkeypatch, capsys):
     monkeypatch.setenv("SAHTE_MOD", "serit-boz")
     monkeypatch.setenv("SAHTE_SERIT", str(d))
     assert akis.main(["yaz", "s1", "b-yazar", str(ortam[3])]) == 1
-    assert (d / "sahiplik").read_text() == "src/**\n"
+    assert (d / "sahiplik").read_text(encoding="utf-8") == "src/**\n"
     assert not (d / "bitti-bag").exists()
-    assert "sahiplik değişti" in (d / akis.KORUMA).read_text()
+    assert "sahiplik değişti" in (d / akis.KORUMA).read_text(encoding="utf-8")
     assert akis.main(["denetle", "s1"]) == 1
-    assert "koruma_ihlal:" in (d / "bitti.log").read_text()
+    assert "koruma_ihlal:" in (d / "bitti.log").read_text(encoding="utf-8")
 
 
 def test_yazici_git_config_degistirirse_geri_yazilir(ortam, monkeypatch, capsys):
@@ -226,7 +226,7 @@ def test_yazici_git_config_degistirirse_geri_yazilir(ortam, monkeypatch, capsys)
     assert akis.main(["yaz", "s1", "b-yazar", str(ortam[3])]) == 1
     assert (repo / ".git" / "config").read_bytes() == once
     d, _ = serit(ortam)
-    assert "config değişti" in (d / akis.KORUMA).read_text()
+    assert "config değişti" in (d / akis.KORUMA).read_text(encoding="utf-8")
     assert akis.main(["kaydet", "s1", "-m", "x"]) == 1
 
 
@@ -239,17 +239,17 @@ def test_reviewer_baska_saglayicidan_secilir(ortam, monkeypatch, capsys):
     assert akis.main(["yaz", "s1", "b-yazar", str(ortam[3])]) == 0
     assert akis.main(["incele", "s1"]) == 0, capsys.readouterr().out
     d, _ = serit(ortam)
-    meta = json.loads((d / "review-1.meta").read_text())
+    meta = json.loads((d / "review-1.meta").read_text(encoding="utf-8"))
     assert meta["reviewer"] == "i-inceler"
     assert (meta["yazici_saglayici"], meta["reviewer_saglayici"], meta["ayni_saglayici"]) == ("birinci", "ikinci", False)
     # İkinci sağlayıcının şablonunda {istem} yok: istem stdin'den gitti ve farkı taşıyor.
-    assert iz.read_text().splitlines() == ["yazici b-yazar dosya", "reviewer i-inceler stdin"]
-    assert "inceleyen i-inceler" in (d / "review-1.md").read_text()
-    assert "rapor: geçerli" in (d / "review-1.sema").read_text()
+    assert iz.read_text(encoding="utf-8").splitlines() == ["yazici b-yazar dosya", "reviewer i-inceler stdin"]
+    assert "inceleyen i-inceler" in (d / "review-1.md").read_text(encoding="utf-8")
+    assert "rapor: geçerli" in (d / "review-1.sema").read_text(encoding="utf-8")
     # Açıkça aynı sağlayıcı seçilirse bilgi verilir ve ölçüm alanına yazılır.
     assert akis.main(["incele", "s1", "--profil", "b-inceler"]) == 0
     assert "aynı sağlayıcıda" in capsys.readouterr().out
-    assert json.loads((d / "review-2.meta").read_text())["ayni_saglayici"] is True
+    assert json.loads((d / "review-2.meta").read_text(encoding="utf-8"))["ayni_saglayici"] is True
     assert akis.main(["incele", "s1", "--profil", "b-yazar"]) == 2
 
 
@@ -269,9 +269,9 @@ def test_reviewer_agaci_degistirirse_sayilmaz(ortam, monkeypatch, capsys):
     monkeypatch.setenv("SAHTE_MOD", "reviewer-boz")
     assert akis.main(["incele", "s1"]) == 1
     d, wt = serit(ortam)
-    assert json.loads((d / "review-1.meta").read_text())["agac_degisti"] is True
+    assert json.loads((d / "review-1.meta").read_text(encoding="utf-8"))["agac_degisti"] is True
     assert not (d / "review-1.sema").exists()
-    assert (wt / "src" / "a.py").read_text() == "reviewer yazdi\n"  # geri alınmaz, yalnız bildirilir
+    assert (wt / "src" / "a.py").read_text(encoding="utf-8") == "reviewer yazdi\n"  # geri alınmaz, yalnız bildirilir
 
 
 def test_api_reviewer(ortam, monkeypatch, capsys):
@@ -328,7 +328,7 @@ def test_sir_ortami_yaziciya_gecmez(ortam, monkeypatch, capsys):
     monkeypatch.setenv("NOBET_ORTAM_IZIN", "IZINLI_TOKEN")
     assert ac(ortam) == 0
     assert akis.main(["yaz", "s1", "b-yazar", str(ortam[3])]) == 0
-    gorulen = json.loads(dosya.read_text())
+    gorulen = json.loads(dosya.read_text(encoding="utf-8"))
     assert "GITHUB_TOKEN" not in gorulen and "OZEL_SECRET" not in gorulen
     assert gorulen["ZARARSIZ_DEGER"] == "1" and gorulen["IZINLI_TOKEN"] == "acik"
     d, _ = serit(ortam)
@@ -345,7 +345,7 @@ def test_zaman_asimi_surec_agacini_kapatir(ortam, monkeypatch, capsys):
     assert akis.main(["yaz", "s1", "b-yazar", str(ortam[3])]) == 1
     assert time.monotonic() - bas < 30
     d, _ = serit(ortam)
-    assert "cikis: 124" in (d / "yaz-1.log").read_text()
+    assert "cikis: 124" in (d / "yaz-1.log").read_text(encoding="utf-8")
 
 
 def test_komut_sablonu():
@@ -371,7 +371,7 @@ def test_kapat_kirli_agacta_durur(ortam, capsys):
     assert akis.main(["yaz", "s1", "b-yazar", str(ortam[3])]) == 0
     assert akis.main(["kapat", "s1"]) == 1
     _, wt = serit(ortam)
-    assert (wt / "src" / "a.py").read_text() == "yeni\n"
+    assert (wt / "src" / "a.py").read_text(encoding="utf-8") == "yeni\n"
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="sembolik bağ yetkisi gerekir")
@@ -386,7 +386,7 @@ def test_kapat_serit_disina_dokunmaz(ortam, capsys):
     (wt / "tests" / "test_kabul.py").unlink()  # kabul dosyası izlenmiyor; ağaç temiz kalsın
     assert akis.main(["kapat", "s1"]) == 0, capsys.readouterr()
     assert not wt.exists()
-    assert (disari / "korunan.txt").read_text() == "dokunma\n"
+    assert (disari / "korunan.txt").read_text(encoding="utf-8") == "dokunma\n"
 
 
 def test_kapat_bozuk_kayitta_baska_dizine_dokunmaz(ortam, capsys):

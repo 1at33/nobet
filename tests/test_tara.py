@@ -1,6 +1,7 @@
 """Çalışma ağacı kişisel veri denetimi. Değerler parçalı yazılır: tarama bu dosyayı yakalamasın."""
 
 import json
+import os
 import subprocess
 
 import pytest
@@ -111,8 +112,12 @@ def test_zorunlu_bayraklar(repo, tmp_path):
 
 
 def test_gitleaks_bulgusu_temiz_sayilmaz(repo, tmp_path, monkeypatch):
-    sahte = tmp_path / "gl"
-    sahte.write_text("#!/bin/sh\nexit 3\n", encoding="utf-8")
+    if os.name == "nt":  # Windows sh betiğini doğrudan çalıştıramaz
+        sahte = tmp_path / "gl.cmd"
+        sahte.write_text("@exit /b 3\r\n", encoding="utf-8")
+    else:
+        sahte = tmp_path / "gl"
+        sahte.write_text("#!/bin/sh\nexit 3\n", encoding="utf-8")
     sahte.chmod(0o755)
     monkeypatch.setenv("GITLEAKS", str(sahte))
     yaz(repo, "a.md", "temiz\n")

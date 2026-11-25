@@ -124,7 +124,11 @@ def _sure(ad, varsayilan):
 def _sirsiz_ortam():
     """Alt süreç ortamı: sır gibi görünenler çıkar; yalnız NOBET_ORTAM_IZIN adları korunur."""
     izin = [a.strip() for a in os.environ.get("NOBET_ORTAM_IZIN", "").split(",") if a.strip()]
-    return temiz_ortam(os.environ, izin)
+    env = temiz_ortam(os.environ, izin)
+    # Çıktı UTF-8 çözülür; Windows'ta Python alt süreçleri aksi halde yerel kod sayfasıyla yazar.
+    env.setdefault("PYTHONUTF8", "1")
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+    return env
 
 
 def _sonraki(d, onek):

@@ -208,7 +208,7 @@ def test_kabul_kisitlari(serit):
     with pytest.raises(kapi.Denetlenemedi, match="worktree dışında"):
         kapi.kabul_yaz(d, wt, ["../disari.py"])
     assert kapi.kabul_yaz(d, wt, [str(wt / "tests" / "test_yeni.py")]) == 0
-    assert "\ttests/test_yeni.py" in (d / "kabul").read_text()
+    assert "\ttests/test_yeni.py" in (d / "kabul").read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize("metin,parca", [
