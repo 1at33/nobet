@@ -42,6 +42,13 @@ TEST = re.compile(
 )
 # Yeni olsa bile pytest'i yükleme sırasında etkileyip sonucu değiştirebilen dosyalar.
 SONUC_DEGISTIREN = re.compile(r"(^|/)(sitecustomize\.py|usercustomize\.py|conftest\.py|[^/]*\.pth)$", re.IGNORECASE)
+# pytest'in kendi yapılandırma dosyaları: her değişiklik (yeni dahil) test sonucunu değiştirebilir.
+PYTEST_AYAR = re.compile(r"(^|/)\.?pytest\.(ini|toml)$", re.IGNORECASE)
+# Ortak yapılandırma dosyaları: yalnız pytest bölümü taşıyorsa (önce ya da sonra) test sonucunu değiştirebilir.
+ORTAK_AYAR = re.compile(r"(^|/)(pyproject\.toml|setup\.cfg|tox\.ini)$", re.IGNORECASE)
+PYTEST_BOLUM = re.compile(rb"^[ \t]*\[(tool\.pytest|tool:pytest|pytest)(\]|\.|$)", re.MULTILINE)
+# Test dizinindeki paket dosyası test modülü yüklenirken çalışır.
+TEST_PAKET = re.compile(r"(^|/)(tests?|__tests__|spec)/(.*/)?__init__\.py$", re.IGNORECASE)
 HEX = re.compile(r"[0-9a-fA-F]{7,40}")
 # --eski: taban sha'sı ya da sahiplik dosyası olmayan eski şerit/test fikstürü; yalnız uyarı.
 # Yalnız komut satırı bayrağıyla açılır: ortam değişkeni ajanın ortamından kapıyı sessizce gevşetebilirdi.
@@ -156,14 +163,58 @@ def kabul_oku(d):
 
 
 def blob(wt, yol):
-    r = git(wt, "hash-object", "--", yol)
+    # --no-filters: yazıcının .gitattributes + filter.*.clean ikilisi değişmiş testi eski içerik gibi göstermesin.
+    r = git(wt, "hash-object", "--no-filters", "--", yol)
     if r.returncode:
         raise Denetlenemedi("hash-object başarısız: " + yol)
     return r.stdout.decode().strip()
 
 
+def yerel_filtreler(wt):
+    """Yazıcının yazabildiği repo/worktree yapılandırmasındaki filter sürücüleri. Clean filtresi git diff'in
+    gördüğü içeriği değiştirir (değişen test eski haliyle görünür); kapı bunları güvenilmez sayar."""
+    adlar = set()
+    for kapsam in ("--local", "--worktree"):
+        r = git(wt, "config", kapsam, "--name-only", "--get-regexp", r"^filter\.")
+        if r.returncode not in (0, 1):  # 1 = eşleşme yok; --worktree kapalıysa 128, yerel kapsam yeter
+            if kapsam == "--local":
+                raise Denetlenemedi("git config okunamadı")
+            continue
+        for satir in r.stdout.decode("utf-8", "replace").splitlines():
+            if satir.strip():
+                adlar.add(satir.strip())
+    return sorted(adlar)
+
+
+def taban_icerik(wt, taban, yol):
+    r = git(wt, "cat-file", "blob", f"{taban}:{yol}")
+    return r.stdout if r.returncode == 0 else b""
+
+
+def sonuc_riski(wt, taban, yol, durum):
+    """Yeni ya da değişen dosya test sonucunu değiştirebiliyorsa nedeni; değilse None."""
+    if SONUC_DEGISTIREN.search(yol) or PYTEST_AYAR.search(yol):
+        return "test sonucunu değiştirebilen dosya"
+    if durum == "A" and TEST_PAKET.search(yol):
+        return "test sonucunu değiştirebilen dosya (test paketi __init__)"
+    if ORTAK_AYAR.search(yol):
+        simdi = b""
+        if durum != "D":
+            try:
+                simdi = (wt / yol).read_bytes()
+            except OSError:
+                simdi = b""
+        if PYTEST_BOLUM.search(simdi) or PYTEST_BOLUM.search(taban_icerik(wt, taban, yol)):
+            return "pytest yapılandırması değişti"
+    if posixpath.basename(yol) == ".gitignore" and durum != "D":
+        return ".gitignore değişti (dosya gizleyebilir)"
+    return None
+
+
 def denetle(d, wt):
     ihlal = []
+    for ad in yerel_filtreler(wt):
+        ihlal.append((".git/config", f"yerel git filtresi ({ad}): içerik karşılaştırmasını değiştirebilir"))
     kabul = kabul_oku(d)
     for yol, h in sorted(kabul.items()):
         if not (wt / yol).is_file():
@@ -199,11 +250,12 @@ def denetle(d, wt):
             if sah is not None and not eslesir(yol, sah):
                 ihlal.append((yol, f"sahiplik dışı ({durum})"))
             # Değişen/silinen test dosyası aşağıdaki mevcut kuralla zaten raporlanır; çift kayıt açma.
-            if SONUC_DEGISTIREN.search(yol) and not (durum != "A" and TEST.search(yol)):
+            risk = None if (durum != "A" and TEST.search(yol)) else sonuc_riski(wt, taban, yol, durum)
+            if risk:
                 if eslesir(yol, izin):
                     print(f"kapi_izin: {yol} (test-izni)")
                 else:
-                    ihlal.append((yol, "test sonucunu değiştirebilen dosya"))
+                    ihlal.append((yol, risk))
             if durum != "A" and TEST.search(yol):
                 if eslesir(yol, izin):
                     print(f"kapi_izin: {yol} (test-izni)")
