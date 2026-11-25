@@ -205,7 +205,8 @@ def test_ebeveyn_kendisi_olamaz():
     b'{"a": ' + b"9" * 5000 + b"}",
     b"x" * (haber.ZARF_SINIRI + 1),
     b"{bozuk",
-])
+# Kısa kimlik: pytest test kimliğini PYTEST_CURRENT_TEST ortam değişkenine yazar; Windows 32767 karakter sınırı.
+], ids=["yinelenen-anahtar", "nan", "infinity", "derin-ic-ice", "utf16-bom", "uzun-sayi", "boyut-asimi", "bozuk"])
 def test_coz_saldiri_girdileri(veri):
     with pytest.raises(haber.ZarfHatasi):
         haber.coz(veri)
