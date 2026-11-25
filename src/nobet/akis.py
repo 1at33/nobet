@@ -6,7 +6,9 @@ Komutlar (çıkış 0 tamam, 1 ihlal ya da başarısız, 2 denetlenemedi ya da k
       git worktree (dal nobet/<ad>, taban dalı nobet-taban/<ad>) ve iş dizini açar.
   nobet-akis kabul <ad> <yol>...           worktree'deki yeni test dosyalarını dondurur
   nobet-akis yaz <ad> <profil> <brief.md>  yazıcı ajanı worktree'de, sırsız ortamla çalıştırır
-  nobet-akis denetle <ad> [--rapor R]      bitti komutu + kapı + sözleşme komutları + rapor şeması
+  nobet-akis denetle <ad> [--rapor R] [--dongu]
+      bitti komutu + kapı + sözleşme komutları + rapor şeması; --dongu (ya da ayar.toml'da
+      [dongu] akis_denetle = true) yazıcı denemelerini döngü kapısından da geçirir
   nobet-akis incele <ad> [--profil P] [--ek ek.md]
       reviewer (varsayılan: başka sağlayıcıdan ilk aday) farkı inceler; ağacı değiştirirse ret
   nobet-akis kaydet <ad> -m <mesaj>        yeşil ve güncel bitti + temiz kapı ise şerit dalına commit
@@ -41,7 +43,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from nobet import ayar, bitti, kapi, profil
+from nobet import ayar, bitti, dongu, kapi, profil
 from nobet.bitti import _HARIC
 from nobet.gizli import maskele, temiz_ortam
 
@@ -527,8 +529,13 @@ def _ajan_adimi(d, wt, s, model, rol, istem, onek):
     muhur = muhur_al(d, wt)
     kod, cevap, gunluk = ajan_kos(s, model, rol, istem, wt, _sure("NOBET_AKIS_SURE", "45m"))
     ihlal = muhur_dogrula(muhur)
+    # durum_hash: denemenin kanıt özeti; döngü kapısı aynı özetle aynı raporu "kanıtsız tekrar" sayar.
+    try:
+        dh = bitti.durum_hash(wt)
+    except bitti.DurumHashHatasi:
+        dh = ""
     _yaz(d / f"{onek}-{n}.log",
-         f"tarih: {_simdi()}\nprofil: {model}\nsaglayici: {s.ad}\ncikis: {kod}\n\n{gunluk}")
+         f"tarih: {_simdi()}\nprofil: {model}\nsaglayici: {s.ad}\ncikis: {kod}\ndurum_hash: {dh}\n\n{gunluk}")
     _yaz(d / f"{onek}-{n}.md", cevap)
     if ihlal:
         _koruma_yaz(d, rol, ihlal)
@@ -560,9 +567,27 @@ def _son_rapor(d):
     return d / f"yaz-{max(sayilar)}.md" if sayilar else None
 
 
-def denetle(ad, rapor_yolu=None):
-    """Sıra (fail-closed): bitti komutu -> durum özeti -> sert kapı -> bitti.log -> sözleşme komutları -> rapor."""
+def _dongu(d, ayar_):
+    """(bitti.log satırları, döngü var mı, denetlenemedi mi): şeridin yazıcı denemeleri döngü kapısında."""
+    try:
+        denemeler, ek, atlanan = dongu.serit_denemeleri(d)
+        s = dongu.denetle(denemeler, ayar_.esikler, ayar_.kapali, ek, atlanan)
+    except dongu.DenemeYok:
+        return ["dongu: denetlenecek deneme yok"], False, False
+    except dongu.DonguHatasi as e:
+        return [f"dongu: denetlenemedi: {e}"], False, True
+    satirlar = [f"dongu_ihlal: {i.satir()}" for i in s.ihlaller]
+    satirlar.append(f"dongu: {'REDDEDİLDİ' if s.ihlaller else 'temiz'} ({s.deneme} deneme)")
+    return satirlar, bool(s.ihlaller), False
+
+
+def denetle(ad, rapor_yolu=None, dongu_kapisi=None):
+    """Sıra (fail-closed): bitti komutu -> durum özeti -> sert kapı -> [döngü kapısı] -> bitti.log ->
+    sözleşme komutları -> rapor. dongu_kapisi None ise ayar.toml [dongu] akis_denetle karar verir."""
     d, wt = serit(ad)
+    dongu_ayari = dongu.ayar_oku()
+    if dongu_kapisi is None:
+        dongu_kapisi = dongu_ayari.akis_denetle
     try:
         komut = bitti.bitti_komutu(d)
     except (bitti.BittiYok, bitti.BozukBitti) as e:
@@ -582,7 +607,13 @@ def denetle(ad, rapor_yolu=None):
     baslik += satirlar
     koruma = _koruma_ihlalleri(d)
     baslik += [f"koruma_ihlal: {s}" for s in koruma]
-    if (kk or koruma) and kod == 0:
+    dongu_var = dongu_yok = False
+    if dongu_kapisi:
+        satirlar, dongu_var, dongu_yok = _dongu(d, dongu_ayari)
+        denetlenemedi = denetlenemedi or dongu_yok
+        print("\n".join(satirlar))
+        baslik += satirlar
+    if (kk or koruma or dongu_var or dongu_yok) and kod == 0:
         kod = 1
     kuyruk = maskele(out.decode("utf-8", "replace"), os.environ).splitlines()[-20:]
     log = (f"tarih: {_simdi()}\nkomut_hash: {bitti.komut_hash(komut)}\ncikis: {kod}\ndurum_hash: {dh}\n"
@@ -607,7 +638,7 @@ def denetle(ad, rapor_yolu=None):
             kopya.unlink(missing_ok=True)
             raise
         kapi.rapor_kaydet(d, kopya) if rs == 0 else kopya.unlink(missing_ok=True)
-    sonuc = 0 if kod == 0 and kk == 0 and rs == 0 and not koruma else 1
+    sonuc = 0 if kod == 0 and kk == 0 and rs == 0 and not koruma and not dongu_var else 1
     print("denetle: " + ("geçti" if sonuc == 0 else "REDDEDİLDİ"))
     return sonuc
 
@@ -818,6 +849,8 @@ def _ayristirici():
     dn = alt.add_parser("denetle", help="bitti + kapı + sözleşme + rapor")
     dn.add_argument("ad")
     dn.add_argument("--rapor")
+    dn.add_argument("--dongu", action="store_true", default=None,
+                    help="yazıcı denemelerini döngü kapısından da geçir (nobet-dongu --serit)")
     i = alt.add_parser("incele", help="reviewer çalıştır")
     i.add_argument("ad")
     i.add_argument("--profil")
@@ -841,7 +874,7 @@ def main(argv=None):
         if ns.komut == "yaz":
             return yaz(ns.ad, ns.profil, ns.brief)
         if ns.komut == "denetle":
-            return denetle(ns.ad, ns.rapor)
+            return denetle(ns.ad, ns.rapor, ns.dongu)
         if ns.komut == "incele":
             return incele(ns.ad, ns.profil, ns.ek)
         if ns.komut == "kaydet":

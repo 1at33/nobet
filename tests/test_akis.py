@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from nobet import akis
+from nobet import akis, bitti
 
 SAHTE = r'''
 import argparse, json, os, pathlib, sys, time
@@ -228,6 +228,45 @@ def test_yazici_git_config_degistirirse_geri_yazilir(ortam, monkeypatch, capsys)
     d, _ = serit(ortam)
     assert "config değişti" in (d / akis.KORUMA).read_text(encoding="utf-8")
     assert akis.main(["kaydet", "s1", "-m", "x"]) == 1
+
+
+
+# --- döngü kapısı ---------------------------------------------------------------------------
+
+def test_yaz_kaydi_durum_hash_tasir(ortam, capsys):
+    assert ac(ortam) == 0
+    assert akis.main(["yaz", "s1", "b-yazar", str(ortam[3])]) == 0
+    d, wt = serit(ortam)
+    assert bitti.bitti_alan((d / "yaz-1.log").read_text(encoding="utf-8"), "durum_hash") == bitti.durum_hash(wt)
+
+
+def test_dongu_kapisi_kanitsiz_tekrari_reddeder(ortam, capsys):
+    """Yazıcı ağacı değiştirmeden aynı raporu ikinci kez sunar: --dongu reddeder, kaydet commit atmaz."""
+    assert ac(ortam) == 0
+    for _ in range(2):
+        assert akis.main(["yaz", "s1", "b-yazar", str(ortam[3])]) == 0
+    d, _ = serit(ortam)
+    # Varsayılan davranış değişmedi: döngü kapısı istenmedikçe koşmaz.
+    assert akis.main(["denetle", "s1"]) == 0, capsys.readouterr().out
+    assert "dongu" not in (d / "bitti.log").read_text(encoding="utf-8")
+    assert akis.main(["denetle", "s1", "--dongu"]) == 1
+    cikti = capsys.readouterr().out
+    assert "dongu_ihlal: deneme_tekrari: yaz-2.md ~ yaz-1.md" in cikti
+    log = (d / "bitti.log").read_text(encoding="utf-8")
+    assert "dongu_ihlal: deneme_tekrari" in log and "cikis: 1" in log
+    assert akis.main(["kaydet", "s1", "-m", "x"]) == 1
+
+
+def test_dongu_kapisi_ayardan_acilir_tek_deneme_temiz(ortam, capsys):
+    ayar_f = Path(os.environ["NOBET_AYAR"])
+    ayar_f.write_text(ayar_f.read_text(encoding="utf-8") + "\n[dongu]\nakis_denetle = true\n", encoding="utf-8")
+    assert ac(ortam) == 0
+    assert akis.main(["yaz", "s1", "b-yazar", str(ortam[3])]) == 0
+    assert akis.main(["denetle", "s1"]) == 0, capsys.readouterr().out
+    d, _ = serit(ortam)
+    assert "dongu: temiz (1 deneme)" in (d / "bitti.log").read_text(encoding="utf-8")
+    assert akis.main(["yaz", "s1", "b-yazar", str(ortam[3])]) == 0
+    assert akis.main(["denetle", "s1"]) == 1
 
 
 # --- reviewer -------------------------------------------------------------------------------

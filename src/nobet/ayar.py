@@ -5,6 +5,7 @@ Windows: %APPDATA%\\nobet\\ayar.toml. Standart kütüphane (tomllib); bağımlı
 
 Kodda sağlayıcı ya da model adı varsayılmaz. Bilinmeyen anahtar ValueError'dur.
 Anahtar değeri yazılmaz, yalnız ortam değişkeninin adı (anahtar_env).
+[dongu] tablosu döngü kapısının eşikleridir (nobet.dongu doğrular).
 """
 import os
 import re
@@ -15,7 +16,7 @@ from pathlib import Path
 
 from nobet.gizli import gizli_mi
 
-IZINLI = frozenset({"saglayici"})
+IZINLI = frozenset({"saglayici", "dongu"})
 _SAG_TUR = frozenset({"cli", "api", "yerel"})
 _ROLLER = frozenset({"yazici", "reviewer"})
 _SAG_ALAN = frozenset({"ad", "tur", "komut", "taban_url", "anahtar_env", "modeller", "roller"})
@@ -130,6 +131,11 @@ def saglayicilari_ayikla(veri):
     ekstra = sorted(set(veri) - IZINLI)
     if ekstra:
         raise ValueError("bilinmeyen ayar anahtarı: " + ", ".join(ekstra))
+    if "dongu" in veri:
+        # dongu bu modülü içe aktarır; burada geç içe aktarma döngüsel içe aktarmayı önler.
+        from nobet.dongu import ayar_ayikla
+
+        ayar_ayikla(veri["dongu"])
     ham = veri.get("saglayici", [])
     if not isinstance(ham, list):
         raise ValueError("saglayici liste olmalı")  # noqa: TRY004 - yapılandırma sözleşmesi
@@ -162,19 +168,24 @@ def toml_oku(yol):
     return veri
 
 
-def saglayicilar(dosya=None, env=None, ev=None):
-    """Sağlayıcıları çöz: dosya > NOBET_AYAR > varsayılan. Varsayılan dosya yoksa boş."""
+def ayar_verisi(dosya=None, env=None, ev=None):
+    """Doğrulanmış ham ayar: dosya > NOBET_AYAR > varsayılan. Varsayılan dosya yoksa boş tablo."""
     env = os.environ if env is None else env
     ev = Path.home() if ev is None else Path(ev)
     if dosya is not None:
-        return saglayicilari_ayikla(toml_oku(dosya))
+        return toml_oku(dosya)
     env_dosya = env.get("NOBET_AYAR")
     if env_dosya is not None:
         metin = env_dosya.strip() if isinstance(env_dosya, str) else ""
         if not metin:
             raise ValueError("NOBET_AYAR boş olamaz")
-        return saglayicilari_ayikla(toml_oku(Path(metin).expanduser()))
+        return toml_oku(Path(metin).expanduser())
     yol = varsayilan_dosya(ev, env)
     if yol.is_file():
-        return saglayicilari_ayikla(toml_oku(yol))
-    return ()
+        return toml_oku(yol)
+    return {}
+
+
+def saglayicilar(dosya=None, env=None, ev=None):
+    """Sağlayıcıları çöz: dosya > NOBET_AYAR > varsayılan. Varsayılan dosya yoksa boş."""
+    return saglayicilari_ayikla(ayar_verisi(dosya, env, ev))

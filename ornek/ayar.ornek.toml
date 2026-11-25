@@ -17,3 +17,9 @@ ad = "ornek-cli"
 tur = "cli"
 komut = "ornek-cli calistir --model {model} --dizin {worktree} --istem-dosyasi {istem} --son-cevap {cikti}"
 modeller = ["cli-model"]         # roller verilmezse yazici + reviewer
+
+# İsteğe bağlı: döngü kapısı (nobet-dongu) eşikleri. Yazılmayan anahtar varsayılanını alır; bilinmeyen anahtar hatadır.
+# [dongu]
+# deneme_benzerlik = 0.85      # iki denemenin kelime 4-gram Jaccard benzerliği; bu ve üstü tekrar
+# kapali = []                  # ic_tekrar | deneme_tekrari | kopya_kanit | muhur
+# akis_denetle = false         # true: nobet-akis denetle döngü kapısını da koşar

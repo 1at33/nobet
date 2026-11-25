@@ -14,6 +14,9 @@ rejects out-of-scope edits, modified or deleted existing tests, changed frozen a
 "done" evidence, and reports whose claims don't match real command output. It also scrubs secrets from the
 environment passed to sub-agents, picks a cross-provider reviewer from the user's own provider list, and scans
 the working tree and git history for personal data (e-mail, national ID, a private name list, home-directory paths).
+A heuristic loop gate, `nobet-dongu`, rejects agent outputs that repeat themselves (zlib compression ratio, Shannon
+entropy, word 4-gram Jaccard), near-identical attempts, copy-pasted evidence and claims re-submitted without new
+evidence.
 An optional orchestration shell, `nobet-akis`, runs the whole loop with your own providers: open a lane (git
 worktree + lane directory), run the writer agent command with a scrubbed environment, run the done-evidence, gate,
 contract commands and report check, ask a reviewer from another provider, commit and remove the lane via git only.
@@ -22,7 +25,7 @@ Exit codes: 0 clean, 1 violation, 2 could not check. Docs and identifiers are Tu
 ## Kurulum
 
 ```
-pip install -e .            # nobet, nobet-akis, nobet-tara ve nobet-gecmis komutları
+pip install -e .            # nobet, nobet-akis, nobet-dongu, nobet-tara ve nobet-gecmis komutları
 pip install -e ".[dev]"     # + pytest, ruff
 ```
 
@@ -35,6 +38,7 @@ pip install -e ".[dev]"     # + pytest, ruff
 | `nobet.gizli` | **Sır temizleme.** Alt sürece verilecek ortamdan, değeri sır gibi görünen (bilinen anahtar kalıbı ya da yüksek entropili uzun dize) ya da adı `key/token/secret/passw/credential/auth` içeren değişkenleri çıkarır; açıkça izin verilenler korunur. git'in ortam ayarı ailesi (`GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_n`, `GIT_CONFIG_VALUE_n`) bir üyesi silinirse bütünüyle çıkarılır; yarım kalırsa alt süreçteki git düşer. Girdiyi değiştirmez, temiz kopya döndürür. |
 | `nobet.profil` | **Yazıcı/reviewer profilleri.** `ayar.toml` içindeki `[[saglayici]]` girdilerinden türer; kodda model listesi yoktur. `reviewer_adaylari` önce başka sağlayıcıyı seçer, yoksa aynı sağlayıcının öteki modelini. |
 | `nobet.akis` | **Orkestrasyon kabuğu (`nobet-akis`).** Şerit açar, yazıcıyı çalıştırır, bitti + kapı + sözleşme + rapor sırasını koşar, başka sağlayıcıdan reviewer çağırır, şeridi yalnız git ile kapatır. Kapı kararlarını kendisi vermez; yukarıdaki modülleri çağırır. Ayrıntı: [Orkestrasyon](#orkestrasyon-nobet-akis). |
+| `nobet.dongu` | **Döngü kapısı (`nobet-dongu`).** Ajan çıktısında ve denemeler arasında tekrar, düşük bilgili dolgu, kopya kanıt ve kanıtsız tekrar iddiayı sıkıştırma oranı, entropi ve k-gram Jaccard ile ölçer; eşik aşılırsa reddeder. Sezgiseldir, sert kapının yerine geçmez. Ayrıntı: [Döngü kapısı](#döngü-kapısı-nobet-dongu). |
 | `nobet.tara` | **Çalışma ağacında kişisel veri.** İzlenen dosyaların diskteki hali ve `.gitignore` dışındaki izlenmeyen dosyalar: geçerli T.C. kimlik no, izinli olmayan e-posta, ad listesindeki adlar, kullanıcı adı taşıyan ev dizini yolları (`C:\Users\<ad>`, `/home/<ad>`, `/Users/<ad>`). gitleaks kuruluysa sır taraması da yapar. Commit öncesi ve yayın öncesi çalıştırılır. |
 | `nobet.gecmis` | **Git geçmişinde kişisel veri.** Ağaç taramasının göremediğine bakar: yazar/committer e-postaları, commit mesajı ve `Co-authored-by` satırları, tag'ler, sonradan silinen dosyalar; `--github` ile dalsız kalmış commit'ler. Bulgunun değerini asla yazmaz, yalnız yerini. |
 
@@ -46,6 +50,7 @@ nobet kabul   <iş dizini> <worktree> <test yolu>...
 nobet rapor   <iş dizini> <rapor.md> <bitti_gecerli 0|1> [madde.log|-] [yazici|reviewer]
 nobet-tara    [--repo .] [--adlar dosya] [--adlar-zorunlu] [--gitleaks-zorunlu] [--json]
 nobet-gecmis  [--repo .] [--aralik A..B] [--adlar dosya] [--adlar-zorunlu] [--json]
+nobet-dongu   GİRDİ... | --serit <iş dizini> | --aralik A..B [--repo .] | --oz-sinama   [--esik AD=DEĞER]... [--json]
 ```
 
 Kabuğun kullandığı yardımcı alt komutlar: `madde-kos`, `madde-cmd`, `kapsam-disi`, `bicim`, `sozlesme-dogrula`;
@@ -70,7 +75,8 @@ bloğu, çift numaralı sözleşme maddesi) birer vaka olarak tutar.
 
 Sağlayıcılar yalnız kullanıcının dosyasından gelir: `NOBET_AYAR` (yol) > `$XDG_CONFIG_HOME/nobet/ayar.toml`
 (Windows: `%APPDATA%\nobet\ayar.toml`). Örnek: [ornek/ayar.ornek.toml](ornek/ayar.ornek.toml). Dosyada
-yalnız `[[saglayici]]` tabloları olur; bilinmeyen anahtar hatadır. Anahtar değeri yazılırsa reddedilir,
+yalnız `[[saglayici]]` tabloları ve isteğe bağlı `[dongu]` tablosu ([döngü kapısı](#döngü-kapısı-nobet-dongu)
+eşikleri) olur; bilinmeyen anahtar hatadır. Anahtar değeri yazılırsa reddedilir,
 yalnız değişkenin adı (`anahtar_env`) yazılır.
 
 | Değişken | Etki |
@@ -91,7 +97,7 @@ Tam döngü, kendi sağlayıcılarınla:
 nobet-akis ac <repo> <ad> --sahiplik 'src/**' [--test-izni GLOB]... [--sozlesme madde.md] [--bitti KOMUT]
               [--kabul KAYNAK=HEDEF]... [--worktree YOL]
 nobet-akis yaz     <ad> <profil> <brief.md>      # yazıcı ajan worktree'de çalışır
-nobet-akis denetle <ad> [--rapor rapor.md]       # bitti -> kapı -> bitti.log -> madde-kos -> rapor
+nobet-akis denetle <ad> [--rapor rapor.md] [--dongu]  # bitti -> kapı -> [döngü] -> bitti.log -> madde-kos -> rapor
 nobet-akis incele  <ad> [--profil P] [--ek ek.md]  # reviewer; verilmezse başka sağlayıcıdan ilk aday
 nobet-akis kaydet  <ad> -m "mesaj"               # yeşil + güncel bitti ve temiz kapı ise şerit dalına commit
 nobet-akis kapat   <ad>                          # temiz worktree'yi git ile kaldırır; dal kalır
@@ -112,7 +118,9 @@ nobet-akis durum   <ad>  |  nobet-akis kabul <ad> <yol>...  |  nobet-akis profil
   ve `denetle`/`kaydet` reddeder. Dosyayı inceleyip elle silmeden şerit geçmez.
 - **denetle** sırası: bitti komutu (sırsız ortam, `NOBET_BITTI_SURE`) -> worktree özeti -> `nobet denetle` ->
   `bitti.log` -> `madde-kos` -> son yazıcı raporuna `rapor` (geçerse `rapor-N.md`). Kapı ihlali bitti'yi kırmızı
-  yapar; "KARŞILANDI" diyen rapor da böylece reddedilir. Denetlenemeyen adım çıkış 2'dir.
+  yapar; "KARŞILANDI" diyen rapor da böylece reddedilir. Denetlenemeyen adım çıkış 2'dir. `--dongu` ya da
+  `ayar.toml`'da `[dongu] akis_denetle = true` ile yazıcı denemeleri [döngü kapısından](#döngü-kapısı-nobet-dongu)
+  da geçer; döngü bitti'yi kırmızı yapar, `kaydet` commit atmaz. Varsayılan kapalıdır.
 - **incele** farkı (commit'li, commit'lenmemiş, yeni dosyalar; gerçek index'e dokunmadan) isteme koyar. Reviewer
   `profil.reviewer_adaylari` ile önce başka sağlayıcıdan seçilir; aynı sağlayıcı yalnız bilgi olarak
   `review-N.meta`'ya yazılır. Reviewer worktree'yi değiştirirse review sayılmaz (değişiklik geri alınmaz,
@@ -156,8 +164,70 @@ Windows yollarında ters bölü yerine `/` kullan ya da yolu tek tırnağa al.
 
 İş dizinleri `NOBET_AKIS_DIZIN` > `$XDG_STATE_HOME/nobet/akis` > `~/.local/state/nobet/akis`
 (Windows: `%LOCALAPPDATA%\nobet\akis`) altında `isler/<ad>`'dır; worktree dışında durur. Kayıtlar: `istem-yaz-N.md`,
-`yaz-N.log/.md`, `bitti.log`, `madde.log`, `rapor-N.md`, `istem-review-N.md`, `review-N.log/.md/.meta/.sema`,
+`yaz-N.log/.md` (log başlığında denemenin `durum_hash`'i), `bitti.log`, `madde.log`, `rapor-N.md`, `istem-review-N.md`, `review-N.log/.md/.meta/.sema`,
 `bitti-bag`, `kaydet.log`, `koruma.ihlal`, `durum-isaret`.
+
+## Döngü kapısı (nobet-dongu)
+
+Alt ajan döngüye girince çıktısı tanınır: aynı raporu küçük değişikliklerle yeniden yazar, metni düşük bilgili
+dolguyla şişirir, eski kanıt dosyasını yeni koşu diye sunar ya da ağaçta hiçbir şey değişmeden aynı "bitti"
+iddiasını tekrarlar. `nobet-dongu` bunları model çağırmadan, metnin kendisinden ölçer ve eşik aşılırsa reddeder.
+
+```
+nobet-dongu deneme-1/ deneme-2/ deneme-3/        # her girdi bir deneme; dizin = içindeki metin dosyaları
+nobet-dongu rapor-1.md rapor-2.md                # tek dosyalı denemeler, verilen sırayla
+nobet-dongu --serit <iş dizini>                  # nobet-akis şeridi: yaz-N.md denemeler, yaz-N.log'daki durum_hash kanıt
+nobet-dongu --aralik A..B [--repo .]             # her commit bir deneme; metin = eklenen satırlar
+nobet-dongu --oz-sinama [--tur 8]                # eşikler hâlâ döngü yakalıyor mu (rastgele tohumlu örnekler)
+  [--esik AD=DEĞER]... [--kapat KAPI]... [--ayar ayar.toml] [--muhur defter.txt [--muhur-salt-oku]] [--json]
+```
+
+Dizinde gizli adlar, `__pycache__`, sembolik bağlar, ikili dosyalar (ilk 8000 baytta NUL) ve 5 MB'tan büyük
+dosyalar atlanır; atlananlar çıktıda yeriyle listelenir. Çıkış 0 temiz, 1 döngü, 2 denetlenemedi (girdi yok, hiç
+metin yok, okunamayan dosya, bozuk ayar ya da mühür defteri) ya da kullanım hatası. Çıktı girdi metnini yazmaz;
+yalnız yeri (verilen yol, dosya adı, `sha8:yol`) ve sayıları. `--json` aynı sonucu makine için verir.
+
+**Kapılar** (k = `shingle`, kelimeler Unicode `\w+` ve büyük/küçük harf farksız):
+
+| Kapı | Ölçü (tek satırda matematik) | Varsayılan eşik |
+|---|---|---|
+| `ic_tekrar` | sıkıştırma: `len(zlib(m, 9)) / len(m)`, Kolmogorov karmaşıklığına kaba vekil | `< 0.16` ret (`.json/.jsonl/.csv/.tsv`: `< 0.10`); yalnız ≥ 260 bayt |
+| | karakter Shannon entropisi `H = -Σ p(c)·log2 p(c)` | `< 2.60` bit/karakter ret; yalnız ≥ 120 bayt |
+| | k-gram tekilliği: `\|tekil k-gram\| / \|tüm k-gram\|` | `< 0.38` ret; yalnız ≥ 32 kelime |
+| | ardışık satır blokları (≥ 35 karakter) arasında k-gram Jaccard `\|A∩B\| / \|A∪B\|` | ≥ 3 blokta, `≥ 0.82` benzer en az 2 çift ve çiftlerin `≥ %25`'i |
+| | birebir tekrar eden blok sayısı (boşluk ve harf büyüklüğü normalize) | en az 2 ve blokların `≥ %35`'i |
+| `deneme_tekrari` | her deneme önceki **tüm** denemelerle k-gram Jaccard (A-B-A salınımı da yakalanır) | `≥ 0.85` ret; < 20 kelimelik deneme karşılaştırılmaz |
+| | kanıt özeti (şeritte `durum_hash`) iki denemede biliniyor ve farklıysa tekrar sayılmaz; aynıysa kısa rapor da birebir aynıysa ret | |
+| `kopya_kanit` | çok dosyalı denemede iki dosyanın k-gram Jaccard'ı ya da önceki bir denemedeki dosyanın birebir aynısı | `≥ 0.90` ret |
+| `muhur` | yalnız `--muhur DEFTER`: girdi içeriklerinin sırasız SHA-256 mührü daha önce deftere yazıldıysa ret; temiz koşu mührü deftere ekler | eşik yok |
+
+`--serit` kipinde `review-N.md` yalnız `ic_tekrar`'a girer. k = 4.
+
+**Eşikler** yukarıdaki varsayılanlardır; öncelik: varsayılan < `ayar.toml` `[dongu]` < `--esik AD=DEĞER`. Bilinmeyen
+ad, yanlış tür (sayı alanına `true`, tam sayı alanına `2.5`) ve aralık dışı değer hatadır (çıkış 2):
+
+```toml
+[dongu]
+sikistirma_min = 0.16        # sikistirma_veri_min = 0.10, sikistirma_bayt = 260
+entropi_min = 2.60           # entropi_bayt = 120
+tekillik_min = 0.38          # tekillik_kelime = 32, shingle = 4
+blok_benzerlik = 0.82        # blok_karakter = 35, blok_sayi = 3, blok_cift = 2, blok_cift_oran = 0.25
+kopya_blok = 2               # kopya_blok_oran = 0.35
+deneme_benzerlik = 0.85      # deneme_kelime = 20
+kopya_benzerlik = 0.90
+kapali = []                  # ic_tekrar | deneme_tekrari | kopya_kanit | muhur
+akis_denetle = false         # true: nobet-akis denetle döngü kapısını her zaman koşar
+```
+
+Eşikleri gevşettiysen `nobet-dongu --oz-sinama` her turda rastgele tohumdan (os.urandom + SHA-256) yeni bir döngü
+metni, neredeyse aynı iki deneme, kopya kanıt ve iki temiz örnek üretir; kapı bunları seçili eşiklerle doğru
+sınıflandırmazsa 1 ile çıkar. Örnekler önceden bilinmez; eşiğin yalnız sabit test metnine göre ayarlanmasını önler.
+
+**Sınırlar.** Kapı sezgiseldir. Metne rastgele gürültü ekleyen ya da her denemede cümleleri yeniden yazan bir
+ajan (ya da saldırgan) ölçüleri kolayca geçer; tersine kalıp raporlar, tablo ve günlük dosyaları yanlış alarm
+verebilir (eşiği yükselt ya da kapıyı `--kapat` ile kapat). Anlamı, doğruluğu ve testlerin gerçekten geçtiğini
+denetlemez: [sert kapının](#parçalar) (sahiplik, test dokunulmazlığı, bitti kanıtı, rapor-kanıt karşılaştırması)
+yerine geçmez, ona eklenir. Çift karşılaştırma deneme sayısında karesel büyür; çok uzun aralıkları parçala.
 
 ## Kişisel veri koruması (CI ve yayın öncesi)
 

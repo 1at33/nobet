@@ -18,6 +18,7 @@ dev = ["pytest>=8", "ruff==0.17.3"]
 [project.scripts]
 nobet = "nobet.kapi:cli"
 nobet-akis = "nobet.akis:cli"
+nobet-dongu = "nobet.dongu:main"
 nobet-gecmis = "nobet.gecmis:main"
 nobet-tara = "nobet.tara:main"
 
