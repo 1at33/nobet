@@ -29,6 +29,10 @@ _HARIC = (
 )
 
 
+# Yazıcının .git/config'i güvenilmez: fsmonitor/hook komut çalıştırır, fsmonitor değişikliği gizler.
+_GIT_GUVENLI = ("-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "-c", "core.hooksPath=" + os.devnull)
+
+
 def _metin(yol: Path) -> str:
     # Text mode'un Windows CRLF dönüşümünü özellikle kullanma.
     return yol.read_bytes().decode("utf-8")
@@ -80,7 +84,7 @@ def durum_hash_hesapla(head: bytes, dosyalar: Mapping[bytes, bytes]) -> str:
 
 def _git(worktree: Path, *args: str) -> bytes:
     sonuc = subprocess.run(
-        ["git", *args], cwd=worktree, check=False, capture_output=True,
+        ["git", *_GIT_GUVENLI, *args], cwd=worktree, check=False, capture_output=True,
         shell=False, timeout=30,
     )
     if sonuc.returncode != 0:
@@ -89,11 +93,13 @@ def _git(worktree: Path, *args: str) -> bytes:
 
 
 def durum_hash(worktree: Path) -> str:
-    """İzlenen ve ignore edilmemiş dosyaların ham çalışma kopyasını özetle."""
+    """İzlenen ve ignore edilmemiş dosyaların ham çalışma kopyasını özetle.
+
+    Yalnız .gitignore kuralları geçerli: .git/info/exclude ve core.excludesFile yazıcı denetimindedir."""
     try:
         liste = _git(
-            worktree, "ls-files", "-z", "--cached", "--others",
-            "--exclude-standard", "--", ".", *_HARIC,
+            worktree, "-c", "core.excludesFile=", "ls-files", "-z", "--cached", "--others",
+            "--exclude-per-directory=.gitignore", "--", ".", *_HARIC,
         )
         head = _git(worktree, "rev-parse", "HEAD").rstrip(b"\n")
         kok = os.fsencode(os.path.abspath(worktree))

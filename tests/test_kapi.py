@@ -439,3 +439,59 @@ def test_madde_komutu_sir_ortamini_gormez(tmp_path, monkeypatch):
     monkeypatch.setenv("NOBET_ORTAM_IZIN", "IZINLI_TOKEN")
     kapi.madde_kos(d, wt)
     assert (d / "madde.log").read_text(encoding="utf-8").split("\t")[1] == "0"
+
+
+# --- Test sonucunu değiştiren yeni dosyalar ve güvenilmez git yapılandırması ---
+@pytest.mark.parametrize("yol", [
+    "src/sitecustomize.py", "src/usercustomize.py", "src/x.pth", "src/conftest.py", "tests/yeni/conftest.py",
+])
+def test_yeni_sonuc_degistiren_dosya_ihlal(serit, capsys, yol):
+    d, wt = serit
+    (wt / yol).parent.mkdir(parents=True, exist_ok=True)
+    (wt / yol).write_text("x\n")
+    assert kapi.denetle(d, wt) == 1
+    assert f"kapi_ihlal: {yol} (test sonucunu değiştirebilen dosya)" in capsys.readouterr().out
+
+
+def test_sonuc_degistiren_dosya_test_izni_ile_gecer(serit, capsys):
+    d, wt = serit
+    (wt / "src" / "sitecustomize.py").write_text("x\n")
+    (d / "test-izni").write_text("src/sitecustomize.py\n")
+    assert kapi.denetle(d, wt) == 0
+    assert "kapi_izin: src/sitecustomize.py (test-izni)" in capsys.readouterr().out
+
+
+def test_sonuc_degistiren_dosya_kabulde_gecer(serit):
+    d, wt = serit
+    (wt / "tests" / "conftest.py").write_text("x\n")
+    kapi.kabul_yaz(d, wt, ["tests/conftest.py"])
+    assert kapi.denetle(d, wt) == 0
+
+
+def test_mevcut_conftest_degisimi_ihlal_kalir(serit, capsys):
+    d, wt = serit
+    (wt / "tests" / "conftest.py").write_text("a\n")
+    git(wt, "add", "-A")
+    git(wt, "-c", "user.name=t", "-c", "user.email=t@l", "commit", "-qm", "conftest")
+    (d / "taban").write_text(subprocess.run(["git", "-C", str(wt), "rev-parse", "HEAD"],
+                                            capture_output=True, text=True, check=False).stdout)
+    (wt / "tests" / "conftest.py").write_text("b\n")
+    assert kapi.denetle(d, wt) == 1
+    assert "mevcut test değişti" in capsys.readouterr().out
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="fsmonitor betiği sh ile yazıldı")
+def test_fsmonitor_yapilandirmasi_gizlemez(serit, capsys):
+    d, wt = serit
+    iz = wt.parent / "fsm-calisti"
+    betik = wt.parent / "fsm.sh"
+    betik.write_text(f"#!/bin/sh\ntouch '{iz}'\nexit 0\n")  # hiçbir şey değişmedi der
+    betik.chmod(0o755)
+    git(wt, "config", "core.fsmonitor", str(betik))
+    if subprocess.run(["git", "-C", str(wt), "update-index", "--fsmonitor"], capture_output=True, check=False).returncode:
+        pytest.skip("kurulu git fsmonitor hook'unu desteklemiyor")
+    iz.unlink(missing_ok=True)  # kurulum adımı betiği zaten çalıştırmış olabilir
+    (wt / "tests" / "test_a.py").write_text("degisti\n")
+    assert kapi.denetle(d, wt) == 1
+    assert "mevcut test değişti" in capsys.readouterr().out
+    assert not iz.exists(), "fsmonitor komutu kapı sürecinde çalıştı"

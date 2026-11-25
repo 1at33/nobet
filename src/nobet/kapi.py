@@ -40,6 +40,8 @@ TEST = re.compile(
     r"|[^/]*_test\.[a-z]+$|[^/]*_spec\.[a-z]+$|[^/]*(?-i:Test).[a-z]+$|[^/]*\.(test|spec)\.[a-z]+$)",
     re.IGNORECASE,
 )
+# Yeni olsa bile pytest'i yükleme sırasında etkileyip sonucu değiştirebilen dosyalar.
+SONUC_DEGISTIREN = re.compile(r"(^|/)(sitecustomize\.py|usercustomize\.py|conftest\.py|[^/]*\.pth)$", re.IGNORECASE)
 HEX = re.compile(r"[0-9a-fA-F]{7,40}")
 # --eski: taban sha'sı ya da sahiplik dosyası olmayan eski şerit/test fikstürü; yalnız uyarı.
 # Yalnız komut satırı bayrağıyla açılır: ortam değişkeni ajanın ortamından kapıyı sessizce gevşetebilirdi.
@@ -50,8 +52,12 @@ class Denetlenemedi(Exception):
     """Kapı kararı verilemedi; fail-closed."""
 
 
+# Yazıcının .git/config'i güvenilmez: fsmonitor komut çalıştırır ve değişikliği gizler, hook'lar kapıda koşmasın.
+GIT_GUVENLI = ("-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "-c", "core.hooksPath=" + os.devnull)
+
+
 def git(wt, *args):
-    return subprocess.run(["git", "-C", str(wt), *args], capture_output=True, check=False)
+    return subprocess.run(["git", *GIT_GUVENLI, "-C", str(wt), *args], capture_output=True, check=False)
 
 
 def desen(g):
@@ -192,6 +198,12 @@ def denetle(d, wt):
                 continue
             if sah is not None and not eslesir(yol, sah):
                 ihlal.append((yol, f"sahiplik dışı ({durum})"))
+            # Değişen/silinen test dosyası aşağıdaki mevcut kuralla zaten raporlanır; çift kayıt açma.
+            if SONUC_DEGISTIREN.search(yol) and not (durum != "A" and TEST.search(yol)):
+                if eslesir(yol, izin):
+                    print(f"kapi_izin: {yol} (test-izni)")
+                else:
+                    ihlal.append((yol, "test sonucunu değiştirebilen dosya"))
             if durum != "A" and TEST.search(yol):
                 if eslesir(yol, izin):
                     print(f"kapi_izin: {yol} (test-izni)")

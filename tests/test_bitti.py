@@ -841,3 +841,37 @@ def test_bitti_py_yalniz_standart_kutuphane():
     for ad, seviye in bulunan:
         assert seviye == 0, f"goreli import: {ad!r}"
         assert ad in izinli, f"standart kutuphane disi import: {ad!r}"
+
+
+def test_durum_hash_info_exclude_ta_gizlenen_dosya_degistirir(tmp_path):
+    wt = depo_kur(tmp_path / "r")
+    h0 = durum_hash(wt)
+    (wt / "gizli.py").write_bytes(b"x")
+    (wt / ".git" / "info").mkdir(exist_ok=True)
+    (wt / ".git" / "info" / "exclude").write_bytes(b"gizli.py\n")
+    assert durum_hash(wt) != h0
+    h1 = durum_hash(wt)
+    (wt / "gizli.py").write_bytes(b"y")
+    assert durum_hash(wt) != h1
+
+
+def test_durum_hash_excludes_file_ta_gizlenen_dosya_degistirir(tmp_path):
+    wt = depo_kur(tmp_path / "r")
+    h0 = durum_hash(wt)
+    genel = tmp_path / "genel-ignore"
+    genel.write_bytes(b"gizli.py\n")
+    git(wt, "config", "core.excludesFile", str(genel))
+    (wt / "gizli.py").write_bytes(b"x")
+    assert durum_hash(wt) != h0
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="fsmonitor betiği sh ile yazıldı")
+def test_durum_hash_fsmonitor_komutu_calistirmaz(tmp_path):
+    wt = depo_kur(tmp_path / "r")
+    iz = tmp_path / "fsm-calisti"
+    betik = tmp_path / "fsm.sh"
+    betik.write_text(f"#!/bin/sh\ntouch '{iz}'\nexit 0\n")
+    betik.chmod(0o755)
+    git(wt, "config", "core.fsmonitor", str(betik))
+    durum_hash(wt)
+    assert not iz.exists()
