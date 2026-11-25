@@ -159,7 +159,7 @@ nobet-gecmis --repo . --adlar ~/.config/nobet/kisisel-adlar.txt --adlar-zorunlu 
 
 CI'daki `kisisel-veri` işi ikisini de çalıştırır. Ad listesi repoya girmez: depo ayarlarında `KISISEL_ADLAR`
 gizli değişkenine (her satır bir ad) koyarsanız CI onu kullanır; yoksa ad taraması atlanır, öteki denetimler
-yine koşar. Kendi repolarınızda da aynı işi kullanabilirsiniz: `pip install nobet`, ardından iki komut.
+yine koşar. Kendi repolarınızda da aynı işi kullanabilirsiniz: `pip install -e .` (PyPI'da yayımlanınca `pip install nobet`), ardından iki komut.
 
 ## Sınırlar
 
