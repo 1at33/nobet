@@ -143,6 +143,17 @@ nobet-akis durum   <ad>  |  nobet-akis kabul <ad> <yol>...  |  nobet-akis profil
 Örnek: `komut = "ornek-cli calistir --model {model} --dizin {worktree} --istem-dosyasi {istem} --son-cevap {cikti}"`.
 Windows yollarında ters bölü yerine `/` kullan ya da yolu tek tırnağa al.
 
+**Windows'ta iki tuzak** (gerçek şeritle görüldü):
+
+- **`.cmd` sarmalayıcısı başlamaz.** Komut kabuksuz çalıştığı için npm'in kurduğu `ornek-cli.cmd` gibi
+  sarmalayıcılar bulunamaz; yazıcı `çıkış 127` ile döner. Şablonda aracın gerçek `.exe` dosyasını mutlak
+  yolla yaz (npm paketlerinde genellikle `node_modules/<paket>/.../bin/<ad>.exe`). Araç güncellenince yol
+  değişebilir, yeniden bak.
+- **Başsız (headless) ajan komut çalıştıramayabilir.** Bazı CLI'ların başsız kipi "düzenlemeleri kabul et"
+  izin kipinde kabuk komutlarına izin vermez. O zaman reviewer testleri koşamaz, yalnız kodu okur ve
+  bunu raporuna yazar. CLI'ın izinli araç listesine test ve salt okunur git komutlarını ekle. Reviewer
+  ağacı değiştirirse `incele` yine reddeder.
+
 İş dizinleri `NOBET_AKIS_DIZIN` > `$XDG_STATE_HOME/nobet/akis` > `~/.local/state/nobet/akis`
 (Windows: `%LOCALAPPDATA%\nobet\akis`) altında `isler/<ad>`'dır; worktree dışında durur. Kayıtlar: `istem-yaz-N.md`,
 `yaz-N.log/.md`, `bitti.log`, `madde.log`, `rapor-N.md`, `istem-review-N.md`, `review-N.log/.md/.meta/.sema`,
