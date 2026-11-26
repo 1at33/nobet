@@ -591,7 +591,7 @@ def test_clean_filtresi_kabul_testini_gizleyemez(serit, capsys, tmp_path):
 
 
 def test_blob_filtre_uygulamaz(serit, tmp_path):
-    d, wt = serit
+    _d, wt = serit
     eski = tmp_path / "eski"
     eski.write_text("orj\n")
     git(wt, "config", "filter.f.clean", f"cat '{eski.as_posix()}'")
