@@ -5,6 +5,8 @@ izlenen dosyaların diskteki hali ve `.gitignore` dışındaki izlenmeyen dosyal
 geçerli T.C. kimlik no, izinli olmayan e-posta, ad listesindeki adlar ve kullanıcı adı taşıyan
 ev dizini yolları (`C:\\Users\\<ad>`, `/home/<ad>`, `/Users/<ad>`). gitleaks kuruluysa sır
 taraması da yapılır; `--gitleaks-zorunlu` ile kurulu olmaması hatadır.
+gitleaks raporu iki katmana ayrılır (`nobet.sir`): belirli anahtar türleri her zaman bulgudur,
+genel entropi kuralından gelen sağlama özeti gürültüsü süzülür.
 
 Çıktı bulgunun değerini asla yazmaz, yalnız yerini ve türünü.
 Çıkış kodu: 0 temiz, 1 bulgu, 2 kullanım ya da araç hatası.
@@ -14,10 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
-import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -25,10 +24,12 @@ from .gecmis import (
     Bulgu,
     GecmisHatasi,
     _ad_desenleri,
+    ayir,
     git,
     kisisel_adlar,
     metin_bulgulari,
 )
+from .sir import gitleaks_tara
 
 DOSYA_SINIR = 5_000_000
 # Ev dizini kökü ve ardından gelen kullanıcı adı; ortak yer tutucular izinlidir.
@@ -80,22 +81,6 @@ def agac_tara(repo, adlar):
     return sorted(bulgu), atlanan
 
 
-def gitleaks_tara(repo, zorunlu):
-    """(durum, açıklama). durum: 'temiz' | 'bulgu' | 'yok'. Hata GecmisHatasi."""
-    gl = shutil.which(os.environ.get("GITLEAKS", "gitleaks"))
-    if not gl:
-        if zorunlu:
-            raise GecmisHatasi("gitleaks kurulu değil (--gitleaks-zorunlu)")
-        return "yok", "gitleaks kurulu değil, sır taraması yapılmadı"
-    r = subprocess.run([gl, "detect", "--source", str(repo), "--no-git", "--no-banner", "--redact",
-                        "--exit-code", "3"], capture_output=True, check=False)
-    if r.returncode == 3:
-        return "bulgu", "gitleaks bulgu verdi (ayrıntı için gitleaks'i elle çalıştırın)"
-    if r.returncode:
-        raise GecmisHatasi(f"gitleaks hata ({r.returncode})")
-    return "temiz", "gitleaks temiz"
-
-
 def ayristir(argv=None):
     p = argparse.ArgumentParser(prog="nobet-tara", description=__doc__.splitlines()[0])
     p.add_argument("--repo", default=".", help="yerel repo (varsayılan: bulunulan dizin)")
@@ -116,15 +101,20 @@ def calistir(a):
     if not adlar and a.adlar_zorunlu:
         raise GecmisHatasi("ad listesi yok ya da boş (--adlar-zorunlu)")
     bulgular, atlanan = agac_tara(a.repo, adlar)
-    sir, sir_aciklama = gitleaks_tara(a.repo, a.gitleaks_zorunlu)
+    sir, sir_aciklama, sir_katmanlari = gitleaks_tara(a.repo, a.gitleaks_zorunlu)
+    bulgular, uyarilar = ayir(bulgular)
     temiz = not bulgular and sir != "bulgu"
     if a.json:
         print(json.dumps({"bulgular": [{"yer": b.yer, "tur": b.tur} for b in bulgular],
-                          "atlanan": atlanan, "ad_taramasi": bool(adlar), "sir_taramasi": sir},
+                          "uyarilar": [{"yer": b.yer, "tur": b.tur} for b in uyarilar],
+                          "atlanan": atlanan, "ad_taramasi": bool(adlar), "sir_taramasi": sir,
+                          "sir_katmanlari": sir_katmanlari},
                          ensure_ascii=False))
     else:
         for b in bulgular:
             print(f"{b.tur}: {b.yer}")
+        for b in uyarilar:
+            print(f"uyarı: {b.tur}: {b.yer}")
         if atlanan:
             print(f"uyarı: {len(atlanan)} dosya taranmadı: {', '.join(atlanan[:5])}")
         if not adlar:

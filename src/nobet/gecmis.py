@@ -22,6 +22,27 @@ from pathlib import Path
 
 EPOSTA = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
 TC_ADAY = re.compile(r"(?<!\d)[1-9]\d{10}(?!\d)")
+# İkili içerikte yalnız ASCII adres aranır; rastgele baytların tuttuğu kısa kalıplar adres sayılmaz.
+EPOSTA_IKILI = re.compile(
+    r"([A-Za-z0-9._%+-]+)@((?:[A-Za-z0-9-]+\.)*[A-Za-z0-9-]+)\.[A-Za-z]{2,24}"
+)
+_URL = r"""[^\s"'<>]"""
+ACIK_BAGLANTI = re.compile(
+    r"drive\.google\.com/uc\?(?:" + _URL + r"*?[&;])?id="
+    r"|drive\.google\.com/open\?id="
+    r"|drive\.google\.com/file/d/[\w-]+"
+    r"|drive\.google\.com/drive/folders/[\w-]+"
+    r"|docs\.google\.com/[\w-]+/d/[\w-]+"
+    r"|(?<![A-Za-z0-9-])dropbox\.com/(?:s|sh|scl)/"
+    r"|dl\.dropboxusercontent\.com/" + _URL +
+    r"|X-Amz-Signature="
+    r"|AWSAccessKeyId=" + _URL + r"*?[?&;]Signature="
+    r"|[?&;]Signature=" + _URL + r"*?[&;]AWSAccessKeyId=",
+    re.IGNORECASE,
+)
+UYARI_EPOSTA = "e-posta (ikili, doğrulanmalı)"
+UYARI_BAGLANTI = "açık paylaşım bağlantısı"
+UYARI_TURLERI = frozenset({UYARI_EPOSTA, UYARI_BAGLANTI})
 
 
 def tc_gecerli(s):
@@ -84,6 +105,23 @@ def _eposta_izinli(adres):
     return a in IZINLI_ADRES or bool(IZINLI_ALAN.search(a))
 
 
+def ayir(bulgular):
+    """(kesin, uyarı): uyarılar bulgu gibi raporlanır ama çıkış kodunu değiştirmez."""
+    kesin = sorted(b for b in bulgular if b.tur not in UYARI_TURLERI)
+    uyari = sorted(b for b in bulgular if b.tur in UYARI_TURLERI)
+    return kesin, uyari
+
+
+def _ikili_eposta(yer, metin):
+    bulgu = set()
+    for m in EPOSTA_IKILI.finditer(metin):
+        if _eposta_izinli(m.group(0)):
+            continue
+        uzun = len(m.group(1)) >= 3 and len(m.group(2)) >= 2
+        bulgu.add(Bulgu(yer, "e-posta" if uzun else UYARI_EPOSTA))
+    return bulgu
+
+
 def _ad_desenleri(adlar):
     return [re.compile(rf"(?<!\w){re.escape(a)}(?!\w)", re.IGNORECASE) for a in adlar]
 
@@ -92,8 +130,13 @@ def metin_bulgulari(yer, metin, desenler, ikili=False):
     bulgu = set()
     if not ikili and any(tc_gecerli(m) for m in TC_ADAY.findall(metin)):
         bulgu.add(Bulgu(yer, "TC kimlik no"))
-    if any(not _eposta_izinli(m) for m in EPOSTA.findall(metin)):
-        bulgu.add(Bulgu(yer, "e-posta"))
+    if ikili:
+        bulgu |= _ikili_eposta(yer, metin)
+    else:
+        if any(not _eposta_izinli(m) for m in EPOSTA.findall(metin)):
+            bulgu.add(Bulgu(yer, "e-posta"))
+        if ACIK_BAGLANTI.search(metin):
+            bulgu.add(Bulgu(yer, UYARI_BAGLANTI))
     if any(d.search(metin) for d in desenler):
         bulgu.add(Bulgu(yer, "ad"))
     return bulgu
@@ -245,12 +288,16 @@ def calistir(a):
         bulgular, atlanan = uzak_tara(f"https://github.com/{a.github}.git", adlar, github_shalari(a.github))
     else:
         bulgular, atlanan = tara(a.repo, adlar, a.aralik)
+    bulgular, uyarilar = ayir(bulgular)
     if a.json:
-        print(json.dumps({"bulgular": [{"yer": b.yer, "tur": b.tur} for b in bulgular], "atlanan": atlanan,
-                          "ad_taramasi": bool(adlar)}, ensure_ascii=False))
+        print(json.dumps({"bulgular": [{"yer": b.yer, "tur": b.tur} for b in bulgular],
+                          "uyarilar": [{"yer": b.yer, "tur": b.tur} for b in uyarilar],
+                          "atlanan": atlanan, "ad_taramasi": bool(adlar)}, ensure_ascii=False))
     else:
         for b in bulgular:
             print(f"{b.tur}: {b.yer}")
+        for b in uyarilar:
+            print(f"uyarı: {b.tur}: {b.yer}")
         if atlanan:
             print(f"uyarı: {len(atlanan)} büyük dosya taranmadı: {', '.join(atlanan[:5])}")
         if not adlar:
