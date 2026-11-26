@@ -79,7 +79,8 @@ IZINLI_ALAN = re.compile(
     r"@(?:users\.noreply\.github\.com|example\.(?:com|org|net)|[\w.-]+\.(?:example|test|invalid|localhost))$",
     re.IGNORECASE,
 )
-IZINLI_ADRES = frozenset({"noreply@github.com", "noreply@anthropic.com", "cursoragent@cursor.com"})
+# akis@local: akış orkestratörünün şerit commit'lerindeki sabit, kişisel olmayan araç kimliği; yalnız tam eşleşme (genel *@local değil).
+IZINLI_ADRES = frozenset({"noreply@github.com", "noreply@anthropic.com", "cursoragent@cursor.com", "akis@local"})
 
 
 class GecmisHatasi(RuntimeError):

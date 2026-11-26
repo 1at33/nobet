@@ -197,3 +197,13 @@ def test_ci_gecmisi_tariyor():
     assert "nobet.gecmis" in ci
     assert "fetch-depth: 0" in ci
     assert "pull_request.head.sha" in ci
+
+
+def test_sabit_arac_kimligi_akis_local_bulgu_degil(repo):
+    commit(repo, eposta="akis@local", committer="akis@local")
+    assert turler(repo) == set()
+
+
+def test_baska_local_adres_hala_bulgu(repo):
+    commit(repo, eposta="kisi@local", committer=NOREPLY)
+    assert turler(repo) == {"yazar e-postası"}
