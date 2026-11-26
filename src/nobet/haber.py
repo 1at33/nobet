@@ -51,6 +51,9 @@ ROLLER = ("yonetici", "yazici", "reviewer")
 ZARF_ALANLARI = ("surum", "id", "is_id", "ebeveyn", "tur", "gonderen", "alici", "yazici", "zaman", "govde",
                  "ekler")
 DURUMLAR = ("gelen", "isleniyor", "islenen", "reddedilen")
+KILIT_ADI = "kilit"               # <kutu>/kilit: boş, kalıcı dosya; durum dizinlerinin ve .gecici'nin dışında
+KILIT_SURESI = 10.0               # kutu kilidini en çok bekleme süresi, saniye
+GERI_KILIT_SURESI = 0.5           # geri kuyruk taşımasında kilidi en çok bekleme süresi; dolunca kilitsiz taşınır
 
 ZARF_SINIRI = 512 * 1024          # serileştirilmiş zarf, bayt
 METIN_SINIRI = 100_000            # tek metin değeri, karakter; en uzun cevap (4 bayt/karakter) zarfa sığar
@@ -485,6 +488,7 @@ _OLMADI = frozenset({2, 3, 5, 32, 80, 183})
 
 if sys.platform == "win32":
     import ctypes
+    import msvcrt
     from ctypes import wintypes
 
     _K32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -531,6 +535,8 @@ if sys.platform == "win32":
                 raise ctypes.WinError(kod)
             time.sleep(bekle)
 else:
+    import fcntl
+
     def _adlandir(kaynak, hedef):
         """Hedef varsa FileExistsError, yoksa tek rename. Aynı kaynak için yarışanlardan yalnız biri başarır.
 
@@ -571,10 +577,90 @@ def _gercek_dizin(yol):
     return yol
 
 
+def _kilit_ac(yol):
+    """Kilit dosyasını (yoksa oluşturarak) okuma-yazma açar; tanıtıcı, ya da geçici paylaşım ihlalinde None.
+
+    Sembolik bağ ya da düzenli olmayan dosya HaberHatasi: kilit kutu dışındaki bir dosyaya taşınamaz. Yazmaya
+    açılır: ağ dosya sistemleri dışlayıcı kilit için yazılabilir tanıtıcı ister. Windows'ta yalnız paylaşım ihlali
+    (winerror 32) geçicidir; öteki erişim hataları (salt-okunur dosya, yetki) hemen HaberHatasi.
+    """
+    try:
+        if not stat.S_ISREG(os.lstat(yol).st_mode):
+            raise HaberHatasi(f"posta düzeni bozuk (kilit düzenli dosya değil ya da bağ): {yol}")
+    except FileNotFoundError:
+        pass
+    try:
+        fd = os.open(yol, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0), 0o600)
+    except OSError as e:
+        if sys.platform == "win32" and getattr(e, "winerror", None) == 32:
+            return None  # paylaşım ihlali: dosya o an başka bir tutamaçla paylaşımsız açık; çağıran yeniden dener
+        raise HaberHatasi(f"kutu kilidi açılamadı: {yol}: {e.strerror}") from None
+    try:
+        duzenli = stat.S_ISREG(os.fstat(fd).st_mode)
+    except BaseException:
+        os.close(fd)  # tanıtıcı sızmasın
+        raise
+    if not duzenli:  # ilk kontrol ile açış arasında değiştirilmiş
+        os.close(fd)
+        raise HaberHatasi(f"posta düzeni bozuk (kilit düzenli dosya değil ya da bağ): {yol}")
+    return fd
+
+
+def _kilit_dene(fd):
+    """Beklemeden dışlayıcı kilit dener; başka süreç ya da bu süreçteki başka tanıtıcı tutuyorsa False."""
+    try:
+        if sys.platform == "win32":
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)  # 0. bayt; kilit tanıtıcı başınadır
+        else:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)  # lockf değil: o süreç başınadır, iş parçacığını dışlamaz
+    except (BlockingIOError, PermissionError):
+        return False
+    except OSError as e:
+        raise HaberHatasi(f"kutu kilidi bu dosya sisteminde alınamıyor: {e.strerror}") from None
+    return True
+
+
+def _kilit_birak(fd):
+    with contextlib.suppress(OSError):  # tanıtıcı hemen ardından kapanır; kilit onunla da bırakılır
+        if sys.platform == "win32":
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        else:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+
+
+@contextlib.contextmanager
+def _kutu_kilidi(kutu, sure=None):
+    """Kutu başına dışlayıcı işletim sistemi kilidi (<kutu>/kilit); iş parçacığını da süreci de dışlar.
+
+    Her çağrı kendi tanıtıcısını açar. Tutan süreç ölürse kilit kendiliğinden bırakılır; dosya silinmez. Kilit ya da
+    dosyanın kendisi sure (verilmezse KILIT_SURESI) saniye içinde alınamazsa HaberHatasi.
+    """
+    sure = KILIT_SURESI if sure is None else sure
+    yol, son, fd = kutu / KILIT_ADI, time.monotonic() + sure, None
+    try:
+        while True:
+            if fd is None:
+                fd = _kilit_ac(yol)
+            if fd is not None and _kilit_dene(fd):
+                break
+            if time.monotonic() >= son:
+                raise HaberHatasi(f"kutu kilidi {sure:g} sn içinde alınamadı: {kutu.name}")
+            time.sleep(0.001)
+        try:
+            yield
+        finally:
+            _kilit_birak(fd)
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
 class Posta:
     """Alıcı başına dosya kutusu: <kök>/kutular/<kutu>/{gelen,isleniyor,islenen,reddedilen}/<id>.json.
 
     Yazım atomik: geçici dosya aynı kutuda fsync edilir, hedefe hard link ile (varsa üzerine yazmadan) bağlanır.
+    Aynı kimlik kutuya bir kez girer: birak'ın "kutuda yok" kararı ve bağlaması kutu kilidi (<kutu>/kilit, işletim
+    sistemi kilidi; tutan süreç ölünce kendiliğinden bırakılır) altında tek adımdır.
     Durum geçişi tek atomik yeniden adlandırmadır (_adlandir): ara durum yoktur, süreç ortasında ölse de zarf ya
     kaynakta ya hedeftedir ve kilitli kalmaz. Aynı zarf için eşzamanlı çağıranlardan (iş parçacığı ya da süreç)
     yalnız biri True alır; iki işleyici aynı zarfı alamaz.
@@ -616,10 +702,16 @@ class Posta:
         return None
 
     def birak(self, profil_adi, zarf):
-        """Doğrulanmış zarfı alıcının gelen kutusuna yazar. Aynı kimlik kutuda varsa ZarfVar."""
+        """Doğrulanmış zarfı alıcının gelen kutusuna yazar. Aynı kimlik kutuda (hangi durumda olursa) varsa ZarfVar.
+
+        Aynı kimlik için eşzamanlı çağıranlardan tam biri başarır: "kutuda yok" kararı (bul) ile bağlama kutu kilidi
+        altında tek adımdır; yazım ve fsync kilit dışındadır. tasi'nın ileri geçişleri kilitsizdir ama bul'un tarama
+        sırasıyla aynı yöndedir, var olan zarfı kaçırtmaz; geri geçiş aynı kilidi alır. Kilit KILIT_SURESI içinde
+        alınamazsa HaberHatasi, zarf yazılmaz.
+        """
         dogrula(zarf)
         d = self.kutu(profil_adi, olustur_=True)
-        if self.bul(profil_adi, zarf["id"]):
+        if self.bul(profil_adi, zarf["id"]):  # ucuz erken ret; bağlayıcı karar aşağıda kilit altında
             raise ZarfVar(f"zarf zaten var: {zarf['id']}")
         hedef = d / "gelen" / f"{zarf['id']}.json"
         fd, gecici = tempfile.mkstemp(dir=d / ".gecici", prefix="z-", suffix=".tmp")
@@ -628,16 +720,19 @@ class Posta:
                 f.write(serilestir(zarf) + b"\n")
                 f.flush()
                 os.fsync(f.fileno())
-            try:
-                os.link(gecici, hedef)  # hedef varsa FileExistsError: üzerine yazılmaz
-            except FileExistsError:
-                raise ZarfVar(f"zarf zaten var: {zarf['id']}") from None
-            except OSError:
-                # Hard link desteklemeyen dosya sistemi: üzerine yazmayan yeniden adlandırma.
+            with _kutu_kilidi(d):
+                if self.bul(profil_adi, zarf["id"]):
+                    raise ZarfVar(f"zarf zaten var: {zarf['id']}")
                 try:
-                    _adlandir(gecici, hedef)
+                    os.link(gecici, hedef)  # hedef varsa FileExistsError: üzerine yazılmaz
                 except FileExistsError:
                     raise ZarfVar(f"zarf zaten var: {zarf['id']}") from None
+                except OSError:
+                    # Hard link desteklemeyen dosya sistemi: üzerine yazmayan yeniden adlandırma.
+                    try:
+                        _adlandir(gecici, hedef)
+                    except FileExistsError:
+                        raise ZarfVar(f"zarf zaten var: {zarf['id']}") from None
         finally:
             _sil(gecici)
         return hedef
@@ -689,16 +784,27 @@ class Posta:
         Kaynakta yoksa (başkası aldı), hedefte aynı kimlik varsa, kutu yoksa ya da (Windows) kaynak başka yerde
         açıksa False.
         Beklenmeyen dosya sistemi hatası OSError olarak yükselir.
+
+        İleri geçiş (DURUMLAR sırasında sonraki duruma) kilitsizdir. Geri geçiş (geri kuyruk: isleniyor -> gelen)
+        kutu kilidini alır: birak'ın kilit altındaki taraması, bakılmış bir duruma geri dönen zarfı kaçırmasın.
+        Kilidi en çok GERI_KILIT_SURESI bekler (kısa: kesintide geri kuyruk uzun süre asılı kalmasın). Kilit
+        alınamazsa (süre aşımı, bozuk kilit dosyası) taşıma yine yapılır, hata vermez: zarf kuyruğa döner.
         """
         k, h = self._yol(profil_adi, kaynak, zarf_id), self._yol(profil_adi, hedef, zarf_id)
         if os.path.lexists(h):  # erken ret (kaynak == hedef dahil); bağlayıcı karar _adlandir'dadır
             return False
-        try:
-            _adlandir(k, h)
-        except OSError as e:
-            if _olmadi(e):
-                return False
-            raise
+        with contextlib.ExitStack() as yigin:
+            if DURUMLAR.index(hedef) < DURUMLAR.index(kaynak):
+                if not os.path.lexists(k):  # taşınacak zarf yok: kilidi boşuna meşgul etme
+                    return False
+                with contextlib.suppress(HaberHatasi, OSError):
+                    yigin.enter_context(_kutu_kilidi(k.parent.parent, GERI_KILIT_SURESI))
+            try:
+                _adlandir(k, h)
+            except OSError as e:
+                if _olmadi(e):
+                    return False
+                raise
         return True
 
     def onayla(self, profil_adi, zarf_id):

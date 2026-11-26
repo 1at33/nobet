@@ -280,9 +280,13 @@ terminal kaçışı reddedilir. Zarf komut, yol, çalışma dizini ya da sağlay
 `NOBET_HABER_DIZIN` > `$XDG_STATE_HOME/nobet/haber` > `~/.local/state/nobet/haber` (Windows:
 `%LOCALAPPDATA%\nobet\haber`). Kutu adı profil adından türetilir (küçük harf özet + ad hash'i): profil adı yol
 olarak kullanılmaz, Windows'ta da geçerlidir. Yazım atomiktir (geçici dosya fsync, hedefe üzerine yazmadan hard
-link); aynı kimlik ikinci kez yazılmaz. `isle` zarfı tek rename ile `isleniyor/`'a alır, iki işleyici aynı zarfı
-alamaz; işlenemezse (denetlenemedi) `gelen/`'e döner. Diske yalnız maskeli `govde` yazılır; ajan günlükleri
-`gunluk/<id>-N.log` maskelidir. Sembolik bağ olan kutu ya da zarf dosyası okunmaz.
+link); aynı kimlik ikinci kez yazılmaz, eşzamanlı yeniden gönderimde de: karar kutu kökündeki kalıcı `kilit`
+dosyası üzerinde işletim sistemi kilidiyle verilir. Bu dosya silinmemelidir; kilit 10 saniyede alınamazsa `gonder`
+hata verir, zarf yazılmaz (yeniden denenebilir). Posta kökünün bulunduğu dosya sistemi dosya kilidini
+desteklemelidir (desteklemiyorsa `gonder` hata verir). `isle` zarfı tek rename ile `isleniyor/`'a alır, iki işleyici
+aynı zarfı alamaz; işlenemezse (denetlenemedi) `gelen/`'e döner (bu geri kuyruk, kilit meşgulse kısa süre
+bekleyebilir). Diske yalnız maskeli `govde` yazılır; ajan
+günlükleri `gunluk/<id>-N.log` maskelidir. Sembolik bağ olan kutu ya da zarf dosyası okunmaz.
 
 **Yönlendirme** (`ayar.toml` profilleri, `nobet.profil` ile):
 

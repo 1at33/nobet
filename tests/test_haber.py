@@ -336,8 +336,29 @@ def _isci(tmp_path, kip, posta, *kimlikler):
     src = str(Path(haber.__file__).resolve().parents[1])
     p = subprocess.Popen([sys.executable, "-B", str(betik), src, kip, str(posta.kok), *kimlikler],
                          stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
-    assert p.stdout.readline().strip() == "hazir"
+    _hazir_bekle(p)
     return p
+
+
+def _satir(p, sure=60):
+    """Alt sürecin stdout'undan bir satır; sure saniyede gelmezse süreci öldürür ve testi düşürür."""
+    kutu = []
+    t = threading.Thread(target=lambda: kutu.append(p.stdout.readline()), daemon=True)
+    t.start()
+    t.join(sure)
+    if t.is_alive():
+        p.kill()  # stdout kapanır, okuyan iplik döner
+        t.join(10)
+        pytest.fail(f"alt süreç {sure} sn içinde satır yazmadı")
+    return kutu[0].strip()
+
+
+def _hazir_bekle(p):
+    try:
+        assert _satir(p) == "hazir"
+    except BaseException:
+        _kapat([p])
+        raise
 
 
 def _kapat(surecler):
@@ -451,7 +472,7 @@ def test_tasi_surecler_arasi_yarista_tam_bir_kazanan(tmp_path):
             for p in surecler:
                 p.stdin.write(f"{z['id']} {an}\n")
                 p.stdin.flush()
-            assert sorted(p.stdout.readline().strip() for p in surecler) == ["0", "0", "0", "1"]
+            assert sorted(_satir(p) for p in surecler) == ["0", "0", "0", "1"]
             assert _konumlar(posta, z["id"]) == ["isleniyor"]
     finally:
         _kapat(surecler)
@@ -589,6 +610,253 @@ def test_hard_link_yoksa_birak_yine_uzerine_yazmaz(tmp_path, monkeypatch):
     with pytest.raises(haber.ZarfVar):
         posta.birak("ortak", haber.dogrula({**z, "govde": {"metin": "ikinci"}}))
     assert posta.oku(yol) == z and _gecici_bos(posta)
+
+
+def _cift_gonderim_turu(posta, z, alan=0, donduren=0, yazan=8):
+    """Aynı zarfı `yazan` iplik bırakır; `alan` iplik gelen -> isleniyor alır, `donduren` iplik gelen <-> isleniyor
+    döndürür. (birak sonuçları, beklenmeyen hatalar)."""
+    dur, sonuc, hatalar, bariyer = threading.Event(), [], [], threading.Barrier(yazan)
+
+    def yaz(i):
+        try:
+            bariyer.wait(30)
+            time.sleep(0.0005 * (i % 4))  # yeniden deneme: kopyaların bir kısmı biraz geriden gelir
+            posta.birak("ortak", z)
+            sonuc.append(True)
+        except haber.ZarfVar:
+            sonuc.append(False)
+        except Exception as e:  # noqa: BLE001 - testte her hata toplanır
+            hatalar.append(e)
+
+    def al():
+        while not dur.is_set():
+            posta.tasi("ortak", z["id"], "gelen", "isleniyor")
+
+    def dondur():
+        while not dur.is_set():
+            if not posta.tasi("ortak", z["id"], "isleniyor", "gelen"):
+                posta.tasi("ortak", z["id"], "gelen", "isleniyor")
+
+    hareket = [threading.Thread(target=hedef) for hedef in [al] * alan + [dondur] * donduren]
+    yazanlar = [threading.Thread(target=yaz, args=(i,)) for i in range(yazan)]
+    try:
+        for t in hareket + yazanlar:
+            t.start()
+        for t in yazanlar:
+            t.join(60)
+        time.sleep(0.002)  # varsa ikinci kopya da dolaşıma girsin
+    finally:
+        dur.set()
+        for t in hareket:
+            t.join(60)
+    assert not any(t.is_alive() for t in hareket + yazanlar)
+    return sonuc, hatalar
+
+
+def test_cift_gonderim_es_zamanli_almada_tam_bir_basari_ve_tek_durum(tmp_path):
+    posta = haber.Posta(tmp_path / "p")
+    posta.kutu("ortak", olustur_=True)
+    for _ in range(40):
+        z = haber.dogrula(tam())
+        sonuc, hatalar = _cift_gonderim_turu(posta, z, alan=4)
+        # ilk kopya isleniyor/'a alınınca boşalan gelen/<id>'ye ikinci kopya bağlanmamalı
+        assert hatalar == [] and len(sonuc) == 8 and sonuc.count(True) == 1
+        assert _konumlar(posta, z["id"]) == ["isleniyor"]
+    assert _gecici_bos(posta)
+
+
+def test_cift_gonderim_geri_kuyruk_dongusunde_tam_bir_basari_ve_tek_durum(tmp_path):
+    posta = haber.Posta(tmp_path / "p")
+    posta.kutu("ortak", olustur_=True)
+    for _ in range(40):
+        z = haber.dogrula(tam())
+        sonuc, hatalar = _cift_gonderim_turu(posta, z, alan=2, donduren=4)
+        # geri kuyruk, kilit altındaki taramayı atlatıp var olan zarfı gizlememeli
+        assert hatalar == [] and len(sonuc) == 8 and sonuc.count(True) == 1
+        assert len(_konumlar(posta, z["id"])) == 1
+    assert _gecici_bos(posta)
+
+
+def test_hard_link_yokken_es_zamanli_birak_tam_bir_basari(tmp_path, monkeypatch):
+    posta = haber.Posta(tmp_path / "p")
+    posta.kutu("ortak", olustur_=True)
+    monkeypatch.setattr(haber.os, "link", lambda *a, **kw: (_ for _ in ()).throw(OSError(errno.EPERM, "yok")))
+    for _ in range(20):
+        z = haber.dogrula(tam())
+        sonuc, hatalar = _cift_gonderim_turu(posta, z, yazan=16)
+        assert hatalar == [] and len(sonuc) == 16 and sonuc.count(True) == 1
+        assert _konumlar(posta, z["id"]) == ["gelen"] and posta.oku(posta.bul("ortak", z["id"])[1]) == z
+    assert _gecici_bos(posta)
+
+
+def test_kilit_tutulurken_birak_sure_asiminda_hata_verir_zarf_yazilmaz(tmp_path, monkeypatch):
+    posta = haber.Posta(tmp_path / "p")
+    z = haber.dogrula(tam())
+    monkeypatch.setattr(haber, "KILIT_SURESI", 0.2)
+    with haber._kutu_kilidi(posta.kutu("ortak", olustur_=True)):
+        with pytest.raises(haber.HaberHatasi, match="kutu kilidi") as e:
+            posta.birak("ortak", z)
+        assert not isinstance(e.value, haber.Ret)  # "zarf zaten var" değil: gönderen yeniden deneyebilir
+        assert posta.bul("ortak", z["id"]) is None and _gecici_bos(posta)
+    assert posta.oku(posta.birak("ortak", z)) == z and _gecici_bos(posta)  # kilit bırakılınca yazılır
+
+
+def test_kilit_tutulurken_tasi_ve_onayla_beklemez(tmp_path, monkeypatch):
+    posta = haber.Posta(tmp_path / "p")
+    (z1, _), (z2, _), (z3, _) = _ortak_zarf(posta), _ortak_zarf(posta), _ortak_zarf(posta)
+    with haber._kutu_kilidi(posta.kutu("ortak")):
+        t0 = time.monotonic()
+        assert posta.tasi("ortak", z1["id"], "gelen", "isleniyor") is True
+        assert posta.onayla("ortak", z2["id"]) == "gelen" and posta.onayla("ortak", z1["id"]) == "isleniyor"
+        assert posta.bul("ortak", z1["id"])[0] == posta.bul("ortak", z2["id"])[0] == "islenen"
+        assert posta.tasi("ortak", z3["id"], "gelen", "isleniyor") is True
+        assert time.monotonic() - t0 < haber.KILIT_SURESI / 2  # ileri geçişler kilidi beklemez
+        # geri kuyruk kilidi bekler ama alamazsa da taşır: işlenemeyen zarf isleniyor/'da kalmaz, hata çıkmaz
+        monkeypatch.setattr(haber, "KILIT_SURESI", 0.2)
+        assert posta.tasi("ortak", z3["id"], "isleniyor", "gelen") is True
+        assert _konumlar(posta, z3["id"]) == ["gelen"]
+
+
+def test_kilit_tutulurken_geri_kuyruk_kisa_bekler_ve_kilitsiz_tasir(tmp_path):
+    posta = haber.Posta(tmp_path / "p")
+    z, _ = _ortak_zarf(posta)
+    assert posta.tasi("ortak", z["id"], "gelen", "isleniyor") is True
+    assert haber.GERI_KILIT_SURESI < 1 < haber.KILIT_SURESI  # birak uzun bekler, geri kuyruk kısa
+    with haber._kutu_kilidi(posta.kutu("ortak")):
+        t0 = time.monotonic()
+        assert posta.tasi("ortak", z["id"], "isleniyor", "gelen") is True
+        gecen = time.monotonic() - t0
+    assert haber.GERI_KILIT_SURESI * 0.8 <= gecen < 3  # kilidi kısa süre bekledi, KILIT_SURESI kadar değil
+    assert _konumlar(posta, z["id"]) == ["gelen"]
+
+
+KILIT_ISCI = r"""
+import sys, time
+sys.path.insert(0, sys.argv[1])
+from nobet import haber
+with haber._kutu_kilidi(haber.Posta(sys.argv[2]).kutu("ortak")):
+    print("hazir", flush=True)
+    time.sleep(120)
+"""
+
+
+def test_kilidi_tutan_surec_oldurulunce_birak_calisir(tmp_path, monkeypatch):
+    posta = haber.Posta(tmp_path / "p")
+    posta.kutu("ortak", olustur_=True)
+    z = haber.dogrula(tam())
+    betik = tmp_path / "kilit_isci.py"
+    betik.write_text(KILIT_ISCI, encoding="utf-8")
+    src = str(Path(haber.__file__).resolve().parents[1])
+    p = subprocess.Popen([sys.executable, "-B", str(betik), src, str(posta.kok)], stdin=subprocess.PIPE,
+                         stdout=subprocess.PIPE, text=True)
+    try:
+        assert _satir(p) == "hazir"
+        monkeypatch.setattr(haber, "KILIT_SURESI", 0.2)
+        with pytest.raises(haber.HaberHatasi, match="kutu kilidi"):  # kilit başka süreçte
+            posta.birak("ortak", z)
+        assert posta.bul("ortak", z["id"]) is None
+    finally:
+        _kapat([p])
+    monkeypatch.setattr(haber, "KILIT_SURESI", 10.0)
+    assert posta.oku(posta.birak("ortak", z)) == z and _gecici_bos(posta)  # ölen sürecin kilidi kalmaz
+
+
+def test_kilit_dosyasi_kutu_kokunde_ve_zarf_sayilmaz(tmp_path):
+    posta = haber.Posta(tmp_path / "p")
+    z, yol = _ortak_zarf(posta)
+    kilit = posta.kutu("ortak") / haber.KILIT_ADI
+    assert kilit.is_file() and not kilit.is_symlink() and kilit.stat().st_size == 0
+    assert kilit.parent == yol.parent.parent and _gecici_bos(posta)  # durum dizinlerinin ve .gecici'nin dışında
+    assert [(d, o) for d, _, o, _ in posta.liste("ortak", haber.DURUMLAR)] == [("gelen", z)]
+    assert posta.kutular() == [(posta.kutu("ortak").name, "ortak",
+                                {"gelen": 1, "isleniyor": 0, "islenen": 0, "reddedilen": 0})]
+
+
+def test_kilit_duzenli_dosya_degilse_birak_hata_verir_tasi_calisir(tmp_path):
+    posta = haber.Posta(tmp_path / "p")
+    z, _ = _ortak_zarf(posta)
+    kilit = posta.kutu("ortak") / haber.KILIT_ADI
+    kilit.unlink()
+    kilit.mkdir()
+    yeni = haber.dogrula(tam())
+    t0 = time.monotonic()
+    with pytest.raises(haber.HaberHatasi, match="kilit düzenli dosya değil") as e:
+        posta.birak("ortak", yeni)
+    assert not isinstance(e.value, haber.Ret) and time.monotonic() - t0 < haber.KILIT_SURESI / 2  # yoklamadan
+    assert posta.bul("ortak", yeni["id"]) is None and _gecici_bos(posta) and kilit.is_dir()
+    # taşıma kilide bağlı değil: ileri de geri de çalışır, yeni hata yolu yok
+    assert posta.tasi("ortak", z["id"], "gelen", "isleniyor") is True
+    assert posta.tasi("ortak", z["id"], "isleniyor", "gelen") is True
+    assert posta.onayla("ortak", z["id"]) == "gelen"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="sembolik bağ yetkisi gerekir")
+def test_kilit_sembolik_bagsa_reddedilir_ve_hedefe_dokunulmaz(tmp_path):
+    posta = haber.Posta(tmp_path / "p")
+    kilit = posta.kutu("ortak", olustur_=True) / haber.KILIT_ADI
+    dis = tmp_path / "dis"
+    for hedef_var in (True, False):  # var olan dosyaya bağ ve boşa bağ (açış hedefi oluşturmamalı)
+        if hedef_var:
+            dis.write_bytes(b"dokunma")
+        else:
+            dis.unlink()
+        kilit.unlink(missing_ok=True)
+        kilit.symlink_to(dis)
+        z = haber.dogrula(tam())
+        with pytest.raises(haber.HaberHatasi, match="kilit"):
+            posta.birak("ortak", z)
+        assert posta.bul("ortak", z["id"]) is None and _gecici_bos(posta)
+        assert (dis.read_bytes() == b"dokunma") if hedef_var else not dis.exists()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="açışta geçici paylaşım ihlali yalnız Windows'ta olur")
+def test_kilit_dosyasi_acilirken_gecici_paylasim_ihlali_yoklanir(tmp_path, monkeypatch):
+    posta = haber.Posta(tmp_path / "p")
+    z, yeni = haber.dogrula(tam()), haber.dogrula(tam())
+    gercek, denemeler = os.open, []
+
+    def ac(yol, *a, **kw):
+        if os.path.basename(yol) == haber.KILIT_ADI:
+            denemeler.append(yol)
+            if len(denemeler) <= 3:
+                raise PermissionError(errno.EACCES, "paylaşım ihlali", None, 32)
+        return gercek(yol, *a, **kw)
+
+    def hep_ihlal(yol, *a, **kw):
+        if os.path.basename(yol) == haber.KILIT_ADI:
+            raise PermissionError(errno.EACCES, "paylaşım ihlali", None, 32)
+        return gercek(yol, *a, **kw)
+
+    monkeypatch.setattr(haber.os, "open", ac)
+    assert posta.oku(posta.birak("ortak", z)) == z and len(denemeler) == 4 and _gecici_bos(posta)
+    monkeypatch.setattr(haber, "KILIT_SURESI", 0.2)
+    monkeypatch.setattr(haber.os, "open", hep_ihlal)
+    with pytest.raises(haber.HaberHatasi, match="kutu kilidi"):  # ihlal sürerse süre sonunda hata
+        posta.birak("ortak", yeni)
+    assert posta.bul("ortak", yeni["id"]) is None and _gecici_bos(posta)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="winerror yalnız Windows'ta vardır")
+def test_kilit_dosyasi_erisim_engelliyse_yoklamadan_hata_verir(tmp_path, monkeypatch):
+    posta = haber.Posta(tmp_path / "p")
+    z, _ = _ortak_zarf(posta)
+    yeni, gercek, denemeler = haber.dogrula(tam()), os.open, []
+
+    def engelli(yol, *a, **kw):
+        if os.path.basename(yol) == haber.KILIT_ADI:
+            denemeler.append(yol)
+            raise PermissionError(errno.EACCES, "erişim engellendi", None, 5)
+        return gercek(yol, *a, **kw)
+
+    monkeypatch.setattr(haber.os, "open", engelli)
+    t0 = time.monotonic()
+    with pytest.raises(haber.HaberHatasi, match="kutu kilidi açılamadı") as e:
+        posta.birak("ortak", yeni)
+    assert not isinstance(e.value, haber.Ret) and len(denemeler) == 1  # paylaşım ihlali değil: yeniden denenmez
+    assert time.monotonic() - t0 < haber.KILIT_SURESI / 2
+    assert posta.bul("ortak", yeni["id"]) is None and _gecici_bos(posta)
+    assert posta.tasi("ortak", z["id"], "gelen", "isleniyor") is True  # taşıma kilide bağlı değil
+    assert posta.tasi("ortak", z["id"], "isleniyor", "gelen") is True
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="POSIX'te üzerine yazmama ön kontrole dayanır (rename hedefi ezer)")
