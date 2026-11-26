@@ -322,7 +322,7 @@ def karsilandi(durum):
     return not durum.upper().replace("Ş", "S").endswith("MADI")
 
 
-CALISIR = re.compile(r"`([^`]+)`\s*(?:→|⇒|->|=>)\s*[çc][ıi]k[ıi][şs]\s*:?\s*(\d+)", re.IGNORECASE)
+CALISIR = re.compile(r"`([^`]+)`\s*(?:→|⇒|->|=>)\s*[çc][ıi]k[ıi][şs]\s*:?\s*(\d+)(?!\w)", re.IGNORECASE)
 # Komutun hemen ardından oksuz "çıkış N" (ör. "`pytest` çıkış 0"): koşulmak istenmiş ama biçim tutmamış.
 # Düz anlatım ("--gorev yoksa çıkış 1") hata sayılmaz: 113 gerçek sözleşmede ölçüldü (2026-11-04).
 CIKIS_IZI = re.compile(r"`[^`]+`\s*[,:]?\s*[çc][ıi]k[ıi][şs]\s*:?\s*\d", re.IGNORECASE)
@@ -405,6 +405,12 @@ def calisir_maddeler(d):
         if m and m.group(1).strip():
             sonuc[n] = (m.group(1).strip(), int(m.group(2)))
     return sonuc
+
+
+def anlamsiz_komut(komut):
+    """Boş, yalnız yorum ya da her zaman başarılı (`true`, `:`, `exit 0`) komut: kanıt sayılmaz."""
+    k = komut.strip()
+    return not k or k.startswith("#") or k in ("true", ":", "exit 0")
 
 
 def madde_cmd(d, cikis):
@@ -550,8 +556,13 @@ def rapor(d, rapor_yolu, gecerli, madde_log="-", rol="yazici"):
                 hatalar.append("bitti satırı iki kez")
             bitti_satir = (b.group(1), b.group(2))
     beklenen = sozlesme_maddeleri(d)
-    if beklenen and not reviewer and not calisir_maddeler(d):
-        hatalar.append("sözleşmede koşulabilir madde yok (en az bir madde '`komut` → çıkış N' biçiminde olmalı); biçimsel kanıt yetmez")
+    if beklenen and not reviewer:
+        cal = calisir_maddeler(d)
+        if not any(not anlamsiz_komut(k) for k, _ in cal.values()):
+            hatalar.append(
+                "sözleşmedeki koşulabilir maddelerin komutu anlamsız (boş, yorum, true, :, exit 0); anlamlı bir komut gerekir"
+                if cal else
+                "sözleşmede koşulabilir madde yok (en az bir madde '`komut` → çıkış N' biçiminde olmalı); biçimsel kanıt yetmez")
     for n in beklenen:
         if n not in gorulen:
             hatalar.append(f"madde {n}: raporda yok")

@@ -310,7 +310,7 @@ def rapor(tmp_path, metin, gecerli=True, madde_log="-", rol="yazici"):
 
 @pytest.fixture
 def soz(tmp_path):
-    sozlesme(tmp_path, ["1. bir: `true` → çıkış 0", "2. iki"])
+    sozlesme(tmp_path, ["1. bir: `test 1 = 1` → çıkış 0", "2. iki"])
     return tmp_path
 
 
@@ -647,3 +647,39 @@ def test_kosulabilir_madde_yok_reviewer_etkilenmez(tmp_path):
     sozlesme(tmp_path, ["1. bir", "2. iki"])
     metin = "madde 1: KARŞILANDI | kanıt: `a` → b\nmadde 2: KARŞILANMADI | neden: c\n"
     assert rapor(tmp_path, metin, gecerli=False, rol="reviewer") == 0
+
+
+@pytest.mark.parametrize("komut", ["true", ":", "exit 0", "# sadece yorum"])
+def test_anlamsiz_komut_kosulabilir_sayilmaz(tmp_path, capsys, komut):
+    sozlesme(tmp_path, [f"1. bir: `{komut}` → çıkış 0"])
+    metin = "madde 1: KARŞILANDI | kanıt: `echo ok` → ok\nbitti: KARŞILANDI | kanıt: `b` → 0\n"
+    assert rapor(tmp_path, metin) == 1
+    assert any("komutu anlamsız" in h for h in hatalar(capsys))
+
+
+def test_anlamsiz_komutla_birlikte_anlamli_madde_gecer(tmp_path):
+    sozlesme(tmp_path, ["1. bir: `true` → çıkış 0", "2. iki: `test 1 = 1` → çıkış 0"])
+    metin = ("madde 1: KARŞILANDI | kanıt: `x` → y\nmadde 2: KARŞILANDI | kanıt: `x` → y\n"
+             "bitti: KARŞILANDI | kanıt: `b` → 0\n")
+    assert rapor(tmp_path, metin) == 0
+
+
+@pytest.mark.parametrize("son", ["0abc", "0x", "1_000"])
+def test_cikis_sayisindan_sonra_sinir_ister(tmp_path, capsys, son):
+    sozlesme(tmp_path, [f"1. bir: `test 1 = 1` → çıkış {son}"])
+    assert kapi.calisir_maddeler(tmp_path) == {}
+    metin = "madde 1: KARŞILANDI | kanıt: `echo ok` → ok\nbitti: KARŞILANDI | kanıt: `b` → 0\n"
+    assert rapor(tmp_path, metin) == 1
+    assert any("koşulabilir madde yok" in h for h in hatalar(capsys))
+
+
+def test_cikis_sayisi_sonrasi_noktalama_ve_aciklama_serbest(tmp_path):
+    (tmp_path / "sozlesme.md").write_text("# s\n1. bir: `test 1 = 1` → çıkış 0.\n2. iki: `test 2 = 2` → çıkış 3 olmalı\n",
+                                          encoding="utf-8")
+    assert kapi.calisir_maddeler(tmp_path) == {1: ("test 1 = 1", 0), 2: ("test 2 = 2", 3)}
+
+
+def test_bosluk_komutu_kosulabilir_sayilmaz(tmp_path):
+    sozlesme(tmp_path, ["1. bir: ` ` → çıkış 0"])
+    metin = "madde 1: KARŞILANDI | kanıt: `echo ok` → ok\nbitti: KARŞILANDI | kanıt: `b` → 0\n"
+    assert rapor(tmp_path, metin) == 1
