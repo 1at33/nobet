@@ -25,6 +25,7 @@ sağlayıcı seçemez; yalnız ayar.toml'daki profillerden birini, yönlendirme 
 import argparse
 import contextlib
 import datetime
+import errno
 import hashlib
 import io
 import json
@@ -34,6 +35,7 @@ import re
 import stat
 import sys
 import tempfile
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -475,6 +477,93 @@ def _yaz(yol, metin):
             os.unlink(gecici)
 
 
+# Kısa süreli paylaşım çakışmasında (Windows: dosya başka bir tutamaçla açık) yeniden deneme aralıkları, saniye.
+_BEKLE = (0.001, 0.002, 0.005, 0.01, 0.02)
+# Windows hata kodları; taşıma "olmadı" sayılır, ötekiler yükselir: 2/3 kaynak ya da kutu yok, 5 erişim yok,
+# 32 kaynak başka yerde açık, 80/183 hedef var.
+_OLMADI = frozenset({2, 3, 5, 32, 80, 183})
+
+if sys.platform == "win32":
+    import ctypes
+    from ctypes import wintypes
+
+    _K32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    _K32.CreateFileW.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+                                 wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE)
+    _K32.CreateFileW.restype = wintypes.HANDLE
+    _K32.SetFileInformationByHandle.argtypes = (wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD)
+    _K32.SetFileInformationByHandle.restype = wintypes.BOOL
+    _K32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    _K32.CloseHandle.restype = wintypes.BOOL
+    _GECERSIZ = wintypes.HANDLE(-1).value  # INVALID_HANDLE_VALUE
+
+    class _AdBilgisi(ctypes.Structure):
+        """FILE_RENAME_INFO başlığı; ad değişken uzunluktadır, hizalamayı ctypes yapar (32 ve 64 bit)."""
+
+        _fields_ = (("ustune_yaz", wintypes.DWORD), ("kok", wintypes.HANDLE), ("uzunluk", wintypes.DWORD),
+                    ("ad", wintypes.WCHAR * 1))
+
+    def _adlandir(kaynak, hedef):
+        """Üzerine yazmayan atomik yeniden adlandırma; eşzamanlı çağıranlardan yalnız biri başarır. Hata OSError.
+
+        Kaynak DELETE erişimiyle ve FILE_SHARE_DELETE olmadan açılır, ad tutamaç üzerinden değişir. os.rename
+        (MoveFileExW) kaynağı silme paylaşımıyla açar: geç kalan çağıranın tutamacı dosyayı hedef adında bulur,
+        kendi adına yeniden adlandırma sessizce başarır ve iki çağıran da başarı görür. Paylaşımsız açışta ikinci
+        çağıran 32 (paylaşım ihlali) alır; kısa süre yeniden dener, kazanan bitince kaynağı bulamaz (2).
+        """
+        # surrogatepass: eşsiz vekil içeren yol da (Windows adlarında geçerli) os.rename'deki gibi taşınır
+        ad = os.path.abspath(hedef).encode("utf-16-le", "surrogatepass")
+        tampon = ctypes.create_string_buffer(_AdBilgisi.ad.offset + len(ad) + 2)  # sıfır dolu: üzerine yazma yok
+        _AdBilgisi.from_buffer(tampon).uzunluk = len(ad)
+        ctypes.memmove(ctypes.addressof(tampon) + _AdBilgisi.ad.offset, ad, len(ad))
+        for bekle in (*_BEKLE, None):
+            # 0x00010000 DELETE; 0x3 paylaşım READ|WRITE; 3 OPEN_EXISTING; 0x00200000 OPEN_REPARSE_POINT (bağı izleme)
+            tutamac = _K32.CreateFileW(os.fspath(kaynak), 0x00010000, 0x3, None, 3, 0x00200000, None)
+            if tutamac != _GECERSIZ:
+                try:  # tutamaç alınır alınmaz: her çıkışta kapanır
+                    if not _K32.SetFileInformationByHandle(tutamac, 3, tampon, len(tampon)):  # 3: FileRenameInfo
+                        raise ctypes.WinError(ctypes.get_last_error())
+                finally:
+                    _K32.CloseHandle(tutamac)
+                return
+            kod = ctypes.get_last_error()
+            if kod != 32 or bekle is None:
+                raise ctypes.WinError(kod)
+            time.sleep(bekle)
+else:
+    def _adlandir(kaynak, hedef):
+        """Hedef varsa FileExistsError, yoksa tek rename. Aynı kaynak için yarışanlardan yalnız biri başarır.
+
+        rename tek adımda atomiktir (ikinci çağıran FileNotFoundError alır). Hedef kontrolü ayrı adımdır: üzerine
+        yazmama, aynı kimliğin iki durumda birden bulunmamasına dayanır (birak bunu hard link ile sağlar).
+        """
+        if os.path.lexists(hedef):
+            raise FileExistsError(errno.EEXIST, os.strerror(errno.EEXIST), os.fspath(hedef))
+        os.rename(kaynak, hedef)
+
+
+def _olmadi(hata):
+    """Taşımanın olağan başarısızlığı mı: kaynak yok (başkası aldı), kaynak açık ya da erişilemez, hedef var."""
+    if sys.platform == "win32":
+        return hata.winerror in _OLMADI
+    return isinstance(hata, (FileNotFoundError, PermissionError, FileExistsError))
+
+
+def _sil(yol):
+    """Dosyayı siler; yoksa sessiz. Windows'ta silme reddedilirse (dosya o an açık) kısa süre yeniden dener."""
+    for bekle in (*_BEKLE, None):
+        try:
+            os.unlink(yol)
+        except FileNotFoundError:
+            pass
+        except PermissionError:
+            if bekle is None or sys.platform != "win32":
+                raise
+            time.sleep(bekle)
+            continue
+        return
+
+
 def _gercek_dizin(yol):
     """Dizin değilse ya da sembolik bağsa HaberHatasi: kutu dışına yazım/okuma yok."""
     if yol.is_symlink() or (yol.exists() and not yol.is_dir()):
@@ -486,7 +575,9 @@ class Posta:
     """Alıcı başına dosya kutusu: <kök>/kutular/<kutu>/{gelen,isleniyor,islenen,reddedilen}/<id>.json.
 
     Yazım atomik: geçici dosya aynı kutuda fsync edilir, hedefe hard link ile (varsa üzerine yazmadan) bağlanır.
-    Durum geçişi tek rename'dir; iki işleyici aynı zarfı alamaz.
+    Durum geçişi tek atomik yeniden adlandırmadır (_adlandir): ara durum yoktur, süreç ortasında ölse de zarf ya
+    kaynakta ya hedeftedir ve kilitli kalmaz. Aynı zarf için eşzamanlı çağıranlardan (iş parçacığı ya da süreç)
+    yalnız biri True alır; iki işleyici aynı zarfı alamaz.
     """
 
     def __init__(self, kok_=None):
@@ -542,13 +633,13 @@ class Posta:
             except FileExistsError:
                 raise ZarfVar(f"zarf zaten var: {zarf['id']}") from None
             except OSError:
-                # Hard link desteklemeyen dosya sistemi: tekrar kontrolü + atomik rename.
-                if os.path.lexists(hedef):
+                # Hard link desteklemeyen dosya sistemi: üzerine yazmayan yeniden adlandırma.
+                try:
+                    _adlandir(gecici, hedef)
+                except FileExistsError:
                     raise ZarfVar(f"zarf zaten var: {zarf['id']}") from None
-                os.replace(gecici, hedef)
         finally:
-            with contextlib.suppress(FileNotFoundError):
-                os.unlink(gecici)
+            _sil(gecici)
         return hedef
 
     def oku(self, yol):
@@ -593,14 +684,21 @@ class Posta:
         return sonuc
 
     def tasi(self, profil_adi, zarf_id, kaynak, hedef):
-        """Tek rename ile durum geçişi. Kaynakta yoksa (başkası aldı) False."""
+        """Tek atomik, üzerine yazmayan yeniden adlandırma ile durum geçişi; yarışanlardan yalnız biri True alır.
+
+        Kaynakta yoksa (başkası aldı), hedefte aynı kimlik varsa, kutu yoksa ya da (Windows) kaynak başka yerde
+        açıksa False.
+        Beklenmeyen dosya sistemi hatası OSError olarak yükselir.
+        """
         k, h = self._yol(profil_adi, kaynak, zarf_id), self._yol(profil_adi, hedef, zarf_id)
-        if os.path.lexists(h):
+        if os.path.lexists(h):  # erken ret (kaynak == hedef dahil); bağlayıcı karar _adlandir'dadır
             return False
         try:
-            os.rename(k, h)  # POSIX'te hedef varsa üzerine yazar; yukarıdaki kontrol ve tek kaynak bunu önler
-        except (FileNotFoundError, PermissionError, FileExistsError):
-            return False
+            _adlandir(k, h)
+        except OSError as e:
+            if _olmadi(e):
+                return False
+            raise
         return True
 
     def onayla(self, profil_adi, zarf_id):

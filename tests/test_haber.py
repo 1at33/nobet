@@ -2,6 +2,7 @@
 
 Model çağrısı yok: sağlayıcı komutu tmp_path'teki küçük bir Python betiğidir.
 """
+import errno
 import io
 import json
 import os
@@ -10,6 +11,7 @@ import shlex
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -296,6 +298,349 @@ def test_ayni_zarf_es_zamanli_bir_kez_yazilir_ve_bir_kez_alinir(tmp_path):
         for t in iplikler:
             t.join()
         assert sonuc.count("tamam" if hedef is yaz else True) == 1
+
+
+# Alt süreç işçisi: argv = src, kip, posta kökü, [kimlikler]. "yaris": stdin'deki her "<kimlik> <an_ns>" satırında o
+# ana dek döner, zarfı almayı dener, 1/0 basar. "dongu": öldürülene dek zarfları gelen <-> isleniyor arasında taşır.
+ISCI = r'''
+import sys, threading, time
+sys.path.insert(0, sys.argv[1])
+from nobet import haber
+kip, posta, kimlikler = sys.argv[2], haber.Posta(sys.argv[3]), sys.argv[4:]
+if kip == "yaris":
+    print("hazir", flush=True)
+    for satir in sys.stdin:
+        kimlik, an = satir.split()
+        while time.time_ns() < int(an):
+            pass
+        print(int(posta.tasi("ortak", kimlik, "gelen", "isleniyor")), flush=True)
+else:
+    tasinan = [0]
+    def dongu():
+        while True:
+            for k in kimlikler:
+                if posta.tasi("ortak", k, "gelen", "isleniyor") or posta.tasi("ortak", k, "isleniyor", "gelen"):
+                    tasinan[0] += 1
+    for _ in range(4):
+        threading.Thread(target=dongu, daemon=True).start()
+    while tasinan[0] < 40:
+        time.sleep(0.001)
+    print("hazir", flush=True)
+    time.sleep(120)
+'''
+
+
+def _isci(tmp_path, kip, posta, *kimlikler):
+    betik = tmp_path / "isci.py"
+    betik.write_text(ISCI, encoding="utf-8")
+    src = str(Path(haber.__file__).resolve().parents[1])
+    p = subprocess.Popen([sys.executable, "-B", str(betik), src, kip, str(posta.kok), *kimlikler],
+                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    assert p.stdout.readline().strip() == "hazir"
+    return p
+
+
+def _kapat(surecler):
+    for p in surecler:
+        p.kill()
+        p.wait()
+        p.stdin.close()
+        p.stdout.close()
+
+
+def _ortak_zarf(posta):
+    z = haber.dogrula(tam())
+    return z, posta.birak("ortak", z)
+
+
+def _konumlar(posta, zarf_id):
+    return [d for d in haber.DURUMLAR if os.path.lexists(posta._yol("ortak", d, zarf_id))]
+
+
+def _gecici_bos(posta):
+    return not list((posta.kutu("ortak") / ".gecici").iterdir())
+
+
+def test_tasi_bariyerli_yarista_her_turda_tam_bir_kazanan(tmp_path):
+    posta = haber.Posta(tmp_path / "p")
+    for _ in range(60):
+        z, _ = _ortak_zarf(posta)
+        bariyer, sonuc = threading.Barrier(16), []
+
+        def al(kimlik=z["id"], bariyer=bariyer, sonuc=sonuc):
+            bariyer.wait()
+            sonuc.append(posta.tasi("ortak", kimlik, "gelen", "isleniyor"))
+
+        iplikler = [threading.Thread(target=al) for _ in range(16)]
+        for t in iplikler:
+            t.start()
+        for t in iplikler:
+            t.join()
+        assert sorted(sonuc) == [False] * 15 + [True]
+        assert _konumlar(posta, z["id"]) == ["isleniyor"]
+    assert _gecici_bos(posta)
+
+
+def _dizin_sayisi(posta, durum):
+    return len(list((posta.kutu("ortak") / durum).iterdir()))
+
+
+def test_tasi_farkli_hedef_yarisinda_tam_bir_kazanan_ve_tek_durum(tmp_path):
+    posta = haber.Posta(tmp_path / "p")
+    for tur in range(60):
+        z, _ = _ortak_zarf(posta)
+        bariyer, sonuc = threading.Barrier(16), []
+
+        def al(hedef, kimlik=z["id"], bariyer=bariyer, sonuc=sonuc):
+            bariyer.wait()
+            sonuc.append((posta.tasi("ortak", kimlik, "gelen", hedef), hedef))
+
+        iplikler = [threading.Thread(target=al, args=(hedef,)) for hedef in ("isleniyor", "islenen") * 8]
+        for t in iplikler:
+            t.start()
+        for t in iplikler:
+            t.join()
+        kazananlar = [hedef for alindi, hedef in sonuc if alindi]
+        assert len(sonuc) == 16 and len(kazananlar) == 1  # iki hedeften yalnız biri, yalnız bir çağırana
+        assert posta.bul("ortak", z["id"])[0] == kazananlar[0]
+        assert _konumlar(posta, z["id"]) == kazananlar  # zarf kazananın hedefinde, başka yerde değil
+        assert _dizin_sayisi(posta, "gelen") == 0
+        assert _dizin_sayisi(posta, "isleniyor") + _dizin_sayisi(posta, "islenen") == tur + 1  # ne kayıp ne çift
+    assert _gecici_bos(posta)
+
+
+def test_tasi_ile_onayla_yarisinda_zarf_tek_durumda(tmp_path):
+    posta = haber.Posta(tmp_path / "p")
+    for tur in range(60):
+        z, _ = _ortak_zarf(posta)
+        bariyer, alanlar, onaylar = threading.Barrier(16), [], []
+
+        def al(kimlik=z["id"], bariyer=bariyer, alanlar=alanlar):
+            bariyer.wait()
+            alanlar.append(posta.tasi("ortak", kimlik, "gelen", "isleniyor"))
+
+        def onayla(kimlik=z["id"], bariyer=bariyer, onaylar=onaylar):
+            bariyer.wait()
+            onaylar.append(posta.onayla("ortak", kimlik))
+
+        iplikler = [threading.Thread(target=hedef) for hedef in (al, onayla) * 8]
+        for t in iplikler:
+            t.start()
+        for t in iplikler:
+            t.join()
+        [durum] = _konumlar(posta, z["id"])  # ne kayıp ne çift
+        assert posta.bul("ortak", z["id"])[0] == durum and durum in ("isleniyor", "islenen")
+        assert len(alanlar) == len(onaylar) == 8 and alanlar.count(True) <= 1
+        assert onaylar.count("gelen") <= 1  # gelen/'den doğrudan onay en çok bir çağıranda
+        if durum == "isleniyor":  # hiçbir onay taşıyamadı: zarfı alan tek çağıran var
+            assert alanlar.count(True) == 1 and set(onaylar) == {None}
+        assert _dizin_sayisi(posta, "gelen") == 0
+        assert _dizin_sayisi(posta, "isleniyor") + _dizin_sayisi(posta, "islenen") == tur + 1
+    assert _gecici_bos(posta)
+
+
+def test_tasi_surecler_arasi_yarista_tam_bir_kazanan(tmp_path):
+    posta = haber.Posta(tmp_path / "p")
+    posta.kutu("ortak", olustur_=True)
+    surecler = []
+    try:
+        surecler.extend(_isci(tmp_path, "yaris", posta) for _ in range(4))
+        for _ in range(30):
+            z, _ = _ortak_zarf(posta)
+            an = time.time_ns() + 5_000_000
+            for p in surecler:
+                p.stdin.write(f"{z['id']} {an}\n")
+                p.stdin.flush()
+            assert sorted(p.stdout.readline().strip() for p in surecler) == ["0", "0", "0", "1"]
+            assert _konumlar(posta, z["id"]) == ["isleniyor"]
+    finally:
+        _kapat(surecler)
+
+
+def test_tasi_ortasinda_olen_surec_zarfi_kaybetmez_ve_kilitlemez(tmp_path):
+    posta = haber.Posta(tmp_path / "p")
+    zarflar = [_ortak_zarf(posta)[0] for _ in range(6)]
+    for gecikme in (0.0, 0.02, 0.05, 0.09):
+        p = _isci(tmp_path, "dongu", posta, *(z["id"] for z in zarflar))
+        time.sleep(gecikme)
+        _kapat([p])  # taşıma döngüsünün ortasında öldür
+        for z in zarflar:
+            [durum] = _konumlar(posta, z["id"])  # ne kayıp ne çift
+            oteki = "isleniyor" if durum == "gelen" else "gelen"
+            assert posta.tasi("ortak", z["id"], durum, oteki) and posta.tasi("ortak", z["id"], oteki, durum)
+            assert posta.oku(posta.bul("ortak", z["id"])[1]) == z
+    assert _gecici_bos(posta)
+    assert {f.name for d in ("gelen", "isleniyor") for f in (posta.kutu("ortak") / d).iterdir()} \
+        == {f"{z['id']}.json" for z in zarflar}
+
+
+def test_tasi_dosya_acikken(tmp_path):
+    posta = haber.Posta(tmp_path / "p")
+    z, yol = _ortak_zarf(posta)
+    with open(yol, "rb"):
+        alindi = posta.tasi("ortak", z["id"], "gelen", "isleniyor")
+        if sys.platform == "win32":  # Windows: başka yerde açık dosya taşınmaz, yerinde kalır
+            assert alindi is False and _konumlar(posta, z["id"]) == ["gelen"]
+    if sys.platform == "win32":
+        assert posta.tasi("ortak", z["id"], "gelen", "isleniyor") is True  # kapanınca kilit kalmaz
+    else:
+        assert alindi is True  # POSIX: açık dosyanın adı değişebilir
+    assert _konumlar(posta, z["id"]) == ["isleniyor"]
+    assert posta.oku(posta.bul("ortak", z["id"])[1]) == z and _gecici_bos(posta)
+
+
+def test_tasi_kutu_ya_da_kaynak_yoksa_ve_hedef_doluysa_false(tmp_path):
+    posta = haber.Posta(tmp_path / "p")
+    yok = haber.yeni_id()
+    assert posta.tasi("yok", yok, "gelen", "isleniyor") is False
+    assert not (tmp_path / "p").exists()  # taşıma kutu oluşturmaz
+    z, yol = _ortak_zarf(posta)
+    assert posta.tasi("ortak", yok, "gelen", "isleniyor") is False  # kutu var, zarf yok
+    assert posta.tasi("ortak", z["id"], "isleniyor", "islenen") is False  # zarf o durumda değil
+    assert posta.tasi("ortak", z["id"], "gelen", "gelen") is False  # kaynak == hedef
+    rakip = yol.parent.parent / "isleniyor" / yol.name
+    rakip.write_bytes(b"rakip")
+    assert posta.tasi("ortak", z["id"], "gelen", "isleniyor") is False  # hedefte aynı kimlik: üzerine yazılmaz
+    assert rakip.read_bytes() == b"rakip" and posta.oku(yol) == z
+
+
+def test_tasi_beklenmeyen_hatayi_yutmaz(tmp_path, monkeypatch):
+    posta = haber.Posta(tmp_path / "p")
+    z, _ = _ortak_zarf(posta)
+
+    def bozuk(kaynak, hedef):
+        raise OSError(errno.EIO, "aygıt hatası")
+
+    monkeypatch.setattr(haber, "_adlandir", bozuk)
+    with pytest.raises(OSError, match="aygıt hatası"):
+        posta.tasi("ortak", z["id"], "gelen", "isleniyor")
+    assert _konumlar(posta, z["id"]) == ["gelen"]
+
+
+def test_geri_kuyruk_ile_yarista_zarfin_tek_sahibi_olur(tmp_path):
+    posta = haber.Posta(tmp_path / "p")
+    z, _ = _ortak_zarf(posta)
+    durum, ihlal, kilit, son = {"sahip": 0, "alim": 0}, [], threading.Lock(), time.monotonic() + 60
+
+    def isleyici():
+        while time.monotonic() < son:
+            with kilit:
+                if durum["alim"] >= 150 or ihlal:
+                    return
+            if not posta.tasi("ortak", z["id"], "gelen", "isleniyor"):
+                continue
+            with kilit:
+                durum["sahip"] += 1
+                durum["alim"] += 1
+                if durum["sahip"] != 1:
+                    ihlal.append("aynı zarf iki işleyicide")
+            if _konumlar(posta, z["id"]) != ["isleniyor"]:
+                ihlal.append("alınan zarf isleniyor/'da değil")
+            with kilit:
+                durum["sahip"] -= 1
+            if not posta.tasi("ortak", z["id"], "isleniyor", "gelen"):  # işlenemedi: kuyruğa geri
+                ihlal.append("sahibin geri kuyruğu reddedildi")
+
+    iplikler = [threading.Thread(target=isleyici) for _ in range(8)]
+    for t in iplikler:
+        t.start()
+    for t in iplikler:
+        t.join()
+    assert ihlal == [] and durum["alim"] >= 150
+    assert _konumlar(posta, z["id"]) == ["gelen"] and posta.oku(posta.bul("ortak", z["id"])[1]) == z
+
+
+def test_birakirken_alma_yarisinda_birak_hatasiz_ve_tek_alan(tmp_path):
+    posta = haber.Posta(tmp_path / "p")
+    posta.kutu("ortak", olustur_=True)
+    for _ in range(40):
+        z = haber.dogrula(tam())
+        alanlar, alindi, son = [], threading.Event(), time.monotonic() + 30
+
+        def al(kimlik=z["id"], alanlar=alanlar, alindi=alindi, son=son):
+            while not alindi.is_set() and time.monotonic() < son:
+                if posta.tasi("ortak", kimlik, "gelen", "isleniyor"):
+                    alanlar.append(1)
+                    alindi.set()
+
+        iplikler = [threading.Thread(target=al) for _ in range(4)]
+        for t in iplikler:
+            t.start()
+        try:
+            posta.birak("ortak", z)  # alıcı zarfı görünür görünmez kapar; geçici adın silinmesi bundan etkilenmez
+        finally:
+            for t in iplikler:
+                t.join()
+        assert alanlar == [1] and _konumlar(posta, z["id"]) == ["isleniyor"]
+        assert _gecici_bos(posta)
+
+
+def test_hard_link_yoksa_birak_yine_uzerine_yazmaz(tmp_path, monkeypatch):
+    posta = haber.Posta(tmp_path / "p")
+    z = haber.dogrula(tam())
+
+    def link_yok(*a, **kw):
+        raise OSError(errno.EPERM, "hard link desteklenmiyor")
+
+    monkeypatch.setattr(haber.os, "link", link_yok)
+    yol = posta.birak("ortak", z)
+    assert posta.oku(yol) == z and _gecici_bos(posta)
+    monkeypatch.setattr(posta, "bul", lambda *a: None)  # ilk kontrol ile yazım arasına giren aynı kimlikli zarf
+    with pytest.raises(haber.ZarfVar):
+        posta.birak("ortak", haber.dogrula({**z, "govde": {"metin": "ikinci"}}))
+    assert posta.oku(yol) == z and _gecici_bos(posta)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="POSIX'te üzerine yazmama ön kontrole dayanır (rename hedefi ezer)")
+def test_kontrol_eskise_bile_yeniden_adlandirma_uzerine_yazmaz(tmp_path, monkeypatch):
+    posta = haber.Posta(tmp_path / "p")
+    z, yol = _ortak_zarf(posta)
+    rakip = yol.parent.parent / "isleniyor" / yol.name
+    rakip.write_bytes(b"rakip")
+    with monkeypatch.context() as m:
+        m.setattr(haber.os.path, "lexists", lambda yol: False)  # kontrolden hemen sonra gelen rakip
+        m.setattr(haber.os, "link", lambda *a, **kw: (_ for _ in ()).throw(OSError(errno.EPERM, "yok")))
+        assert posta.tasi("ortak", z["id"], "gelen", "isleniyor") is False
+        with pytest.raises(haber.ZarfVar):
+            posta.birak("ortak", haber.dogrula({**z, "govde": {"metin": "ikinci"}}))
+    assert rakip.read_bytes() == b"rakip" and posta.oku(yol) == z and _gecici_bos(posta)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="eşsiz vekilli ad ve UTF-16 kodlaması yalnız Windows dalında")
+def test_adlandir_essiz_vekilli_yolu_tasir(tmp_path):
+    dizin = tmp_path / "d\udc80"  # eşsiz vekil: UTF-16'ya yalnız surrogatepass ile kodlanır
+    try:
+        dizin.mkdir()
+        (dizin / "sonda").write_bytes(b"")
+    except OSError:
+        pytest.skip("dosya sistemi eşsiz vekilli adı kabul etmiyor")
+    kaynak, hedef = dizin / "k.json", dizin / "h\udfff.json"
+    kaynak.write_bytes(b"zarf")
+    haber._adlandir(kaynak, hedef)
+    assert not os.path.lexists(kaynak) and hedef.read_bytes() == b"zarf"
+    kaynak.write_bytes(b"ikinci")
+    with pytest.raises(FileExistsError):  # vekilli hedefte de üzerine yazma yok
+        haber._adlandir(kaynak, hedef)
+    assert hedef.read_bytes() == b"zarf" and kaynak.read_bytes() == b"ikinci"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="silme reddi yalnız Windows'ta paylaşım çakışmasıdır")
+def test_gecici_dosya_silmesi_kisa_sureli_retten_sonra_yeniden_dener(tmp_path, monkeypatch):
+    dosya = tmp_path / "z.tmp"
+    dosya.write_bytes(b"x")
+    gercek, denemeler = os.unlink, []
+
+    def unlink(yol):
+        denemeler.append(yol)
+        if len(denemeler) < 3:
+            raise PermissionError(errno.EACCES, "başka yerde açık")
+        gercek(yol)
+
+    monkeypatch.setattr(haber.os, "unlink", unlink)
+    haber._sil(dosya)
+    haber._sil(dosya)  # yoksa sessiz
+    monkeypatch.undo()
+    assert len(denemeler) == 4 and not dosya.exists()
 
 
 @pytest.mark.parametrize("ad", ["../../etc", "..", ".", "CON", "nul", "a/b\\c:d*?", "çok uzun " * 20,
