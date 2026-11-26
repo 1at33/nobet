@@ -310,7 +310,7 @@ def rapor(tmp_path, metin, gecerli=True, madde_log="-", rol="yazici"):
 
 @pytest.fixture
 def soz(tmp_path):
-    sozlesme(tmp_path, ["1. bir", "2. iki"])
+    sozlesme(tmp_path, ["1. bir: `true` → çıkış 0", "2. iki"])
     return tmp_path
 
 
@@ -629,3 +629,21 @@ def test_alt_gitignore_silinmesi_ihlal(serit, capsys):
     (wt / "src" / "ozel.cfg").write_text("x\n")
     assert kapi.denetle(d, wt) == 1
     assert "kapi_ihlal: src/.gitignore (.gitignore değişti (dosya gizleyebilir))" in capsys.readouterr().out
+
+
+def test_kosulabilir_madde_yok_bicimsel_kanit_red(tmp_path, capsys):
+    sozlesme(tmp_path, ["1. bir", "2. iki"])
+    metin = ("madde 1: KARŞILANDI | kanıt: `echo ok` → ok\nmadde 2: KARŞILANDI | kanıt: `echo ok` → ok\n"
+             "bitti: KARŞILANDI | kanıt: `b` → 0\n")
+    assert rapor(tmp_path, metin) == 1
+    assert any("koşulabilir madde yok" in h for h in hatalar(capsys))
+
+
+def test_kosulabilir_madde_yok_sozlesmesiz_etkilenmez(tmp_path):
+    assert rapor(tmp_path, "bitti: KARŞILANDI | kanıt: `b` → 0\n") == 0
+
+
+def test_kosulabilir_madde_yok_reviewer_etkilenmez(tmp_path):
+    sozlesme(tmp_path, ["1. bir", "2. iki"])
+    metin = "madde 1: KARŞILANDI | kanıt: `a` → b\nmadde 2: KARŞILANMADI | neden: c\n"
+    assert rapor(tmp_path, metin, gecerli=False, rol="reviewer") == 0

@@ -550,6 +550,8 @@ def rapor(d, rapor_yolu, gecerli, madde_log="-", rol="yazici"):
                 hatalar.append("bitti satırı iki kez")
             bitti_satir = (b.group(1), b.group(2))
     beklenen = sozlesme_maddeleri(d)
+    if beklenen and not reviewer and not calisir_maddeler(d):
+        hatalar.append("sözleşmede koşulabilir madde yok (en az bir madde '`komut` → çıkış N' biçiminde olmalı); biçimsel kanıt yetmez")
     for n in beklenen:
         if n not in gorulen:
             hatalar.append(f"madde {n}: raporda yok")
