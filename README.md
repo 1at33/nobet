@@ -5,6 +5,12 @@ sorulara betikle cevap verir: sahiplik dışında bir dosyaya dokundu mu, mevcut
 dondurulmuş kabul testi değişti mi, "bitti" kanıtı güncel ve çıkış kodu 0 mı, rapor sözleşmedeki her maddeyi
 gerçek komut çıktısıyla karşılıyor mu. İhlal varsa **reddeder**, uyarmaz. Denetleyemezse de reddeder (fail-closed).
 
+Kapı yazıcının hile yapmadığını denetler; testin anlamlı ya da güçlü olup olmadığını değil: gevşek yazılmış ama geçen
+bir assertion kapıdan geçer. Test ve uygulama kalitesi `nobet-akis`'in çağırdığı reviewer'ın (tercihen başka
+sağlayıcıdan) işidir; gerçek bir koşuda reviewer, kapının kabul ettiği bir testte iki gevşek kontrol buldu. Kapı
+dikkatsiz ajana karşı kurulmuştur, kötü niyetliye karşı değil: ajan yalıtılmış değildir ve sözleşme komutları
+yalıtımsız çalışır ([Sınırlar](#sınırlar)).
+
 Yalnız standart kütüphane, Python 3.11+. `git` komutlarını çağırır. Kapının kendisi model çağırmaz; isteğe bağlı
 orkestrasyon kabuğu (`nobet-akis`) yalnız senin `ayar.toml`'da tanımladığın ajan komutlarını çalıştırır.
 
@@ -25,6 +31,10 @@ through a file mailbox (atomic writes, per-recipient inbox, claim/ack states); t
 profiles in your `ayar.toml` (cross-provider reviewer first, quota failover) and run with your configured
 command, a scrubbed environment and masked logs.
 Exit codes: 0 clean, 1 violation, 2 could not check. Docs and identifiers are Turkish.
+
+The gate checks that the writer did not cheat; it does not judge whether the tests are meaningful, so a loose
+assertion that passes passes the gate. Test quality is the reviewer's job. It is built against a careless agent, not
+a malicious one: the agent is not isolated and contract commands run unisolated via `sh -c` (see [Sınırlar](#sınırlar)).
 
 ## Kurulum
 
@@ -335,6 +345,9 @@ yine koşar. Kendi repolarınızda da aynı işi kullanabilirsiniz: `pip install
 
 ## Sınırlar
 
+- **Test kalitesini denetlemez.** Kapı testin dokunulmadığını ve bitti kanıtının güncel, geçen bir çalıştırmadan
+  geldiğini doğrular; assertion'ın anlamlı olup olmadığına bakmaz. Gevşek ama geçen bir test kapıdan geçer. Bu denetim
+  reviewer'ındır (`nobet-akis`'in çağırdığı, tercihen başka sağlayıcıdan).
 - **Sözleşme komutları çalışır.** `madde-kos` sözleşmedeki komutları `sh -c` ile worktree'de koşar. Komutlara giden
   ortamdan sır gibi görünen değişkenler (adı key/token/secret/passw/credential/auth içeren ya da değeri anahtara
   benzeyen) çıkarılır; gerekenler `NOBET_ORTAM_IZIN` ile açılır. Komut çıktısının kuyruğu `madde-cikti.log`'a
